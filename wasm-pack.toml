@@ -1,0 +1,3 @@
+[package]
+profile = "bundler"
+out-name = "water_model"

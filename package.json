@@ -1,0 +1,18 @@
+{
+  "name": "rust-watermodel",
+  "version": "1.0.0",
+  "description": "Interactive 3D water flow visualization",
+  "main": "index.js",
+  "scripts": {
+    "build": "wasm-pack build --target web",
+    "prestart": "mkdir -p www/pkg && cp -r pkg/* www/pkg/",
+    "start": "npx serve www"
+  },
+  "devDependencies": {
+    "serve": "^14.0.1"
+  },
+  "dependencies": {
+    "geotiff": "^2.0.7",
+    "three": "^0.155.0"
+  }
+}

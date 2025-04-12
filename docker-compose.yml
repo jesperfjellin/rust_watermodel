@@ -1,0 +1,9 @@
+version: '3'
+
+services:
+  watermodel:
+    build: .
+    volumes:
+      - ./data:/data
+    environment:
+      - RUST_LOG=info

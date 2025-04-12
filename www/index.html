@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Water Flow Visualization</title>
+    <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.156.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.156.0/examples/jsm/"
+      }
+    }
+    </script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        #dropZone {
+            border: 2px dashed #ccc;
+            border-radius: 5px;
+            padding: 50px;
+            text-align: center;
+            margin: 20px 0;
+            cursor: pointer;
+        }
+        #dropZone.highlight {
+            border-color: #2196F3;
+            background-color: #e3f2fd;
+        }
+        #canvas3d {
+            width: 100%;
+            height: 500px;
+            border: 1px solid #ddd;
+            margin-top: 20px;
+        }
+        .controls {
+            margin-top: 20px;
+        }
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+            display: none;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <h1>Water Flow Visualization</h1>
+    
+    <div id="dropZone">
+        <p>Drag & drop your GeoTIFF DEM file here</p>
+        <p>or</p>
+        <input type="file" id="fileInput" accept=".tif,.tiff" />
+    </div>
+    
+    <div class="loader" id="loader"></div>
+    <div id="status"></div>
+    
+    <div class="controls">
+        <label>
+            <input type="checkbox" id="fillSinks" checked />
+            Fill sinks in DEM
+        </label>
+        
+        <label>
+            Stream threshold:
+            <input type="range" id="streamThreshold" min="0.001" max="0.1" step="0.001" value="0.01" />
+            <span id="thresholdValue">1%</span>
+        </label>
+    </div>
+    
+    <canvas id="canvas3d"></canvas>
+    
+    <!-- Add GeoTIFF library -->
+    <script src="https://cdn.jsdelivr.net/npm/geotiff@2.0.7/dist-browser/geotiff.js"></script>
+    <script type="module" src="./index.js"></script>
+</body>
+</html>
