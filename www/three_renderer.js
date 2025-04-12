@@ -87,7 +87,13 @@ export class TerrainRenderer {
         
         // Update particle positions if we have a flow model
         if (this.isAnimating && this.particleSystem && this.showWater) {
-            this.updateParticles();
+            try {
+                this.updateParticles();
+            } catch (error) {
+                console.error("Animation error:", error);
+                // Disable animation on error to prevent endless error logs
+                this.isAnimating = false;
+            }
         }
         
         // Render the scene
@@ -384,6 +390,31 @@ export class TerrainRenderer {
         }
     }
     
+    // Find max value in array without using spread operator
+    findMaxValue(array) {
+        if (!array || array.length === 0) return 0.1;
+        
+        let max = 0.1; // Start with small positive value to avoid division by zero
+        const len = array.length;
+        
+        // Process in chunks to avoid call stack issues
+        const chunkSize = 10000;
+        
+        for (let i = 0; i < len; i += chunkSize) {
+            const endIdx = Math.min(i + chunkSize, len);
+            
+            // Find max in this chunk
+            for (let j = i; j < endIdx; j++) {
+                const val = array[j];
+                if (!isNaN(val) && isFinite(val) && val > max) {
+                    max = val;
+                }
+            }
+        }
+        
+        return max;
+    }
+    
     createParticleSystem() {
         if (!this.dimensions || !this.flowData) return;
         
@@ -398,23 +429,37 @@ export class TerrainRenderer {
             const scaleDown = this.terrainScale || 1.0;
             const heightScale = this.heightScale || 2.0 * scaleDown; // Match the terrain height exaggeration
             
-            // Number of particles - limit for performance
-            const maxParticles = 20000;
-            const particleCount = Math.min(this.particleDensity || 10000, maxParticles);
+            // Number of particles - reduce for performance
+            const maxParticles = 10000; // Lower max particles
+            const particleCount = Math.min(this.particleDensity || 5000, maxParticles);
             
             // Create array of particle positions, colors, and sizes
             const positions = new Float32Array(particleCount * 3);
             const colors = new Float32Array(particleCount * 3);
             const sizes = new Float32Array(particleCount);
             
-            // Pre-calculate maximum flow value for normalization
-            const maxFlow = Math.max(...this.flowData);
+            // Pre-calculate maximum flow value safely without spread operator
+            const maxFlow = this.findMaxValue(this.flowData);
             console.log(`Maximum flow value: ${maxFlow}`);
             
-            // Initialize particles
+            // Initialize particles with error handling
             for (let i = 0; i < particleCount; i++) {
-                // Initialize positions anywhere
-                this.respawnParticle(i, positions, colors, sizes, width, height, resolution, maxFlow);
+                try {
+                    // Initialize particle at a random position
+                    this.initializeParticle(i, positions, colors, sizes, width, height, resolution, maxFlow);
+                } catch (particleError) {
+                    console.warn(`Error initializing particle ${i}:`, particleError);
+                    
+                    // Set safe defaults for this particle
+                    const i3 = i * 3;
+                    positions[i3] = 0;
+                    positions[i3 + 1] = 0; 
+                    positions[i3 + 2] = 0;
+                    colors[i3] = 0.3;
+                    colors[i3 + 1] = 0.7;
+                    colors[i3 + 2] = 1.0;
+                    sizes[i] = 2.0;
+                }
             }
             
             // Create life cycles
@@ -429,12 +474,21 @@ export class TerrainRenderer {
             geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
             geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
             
-            // Load texture for particles
-            const texture = new THREE.TextureLoader().load('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAAAsTAAALEwEAmpwYAAAF8WlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgNS42LWMxNDUgNzkuMTYzNDk5LCAyMDE4LzA4LzEzLTE2OjQwOjIyICAgICAgICAiPiA8cmRmOlJERiB4bWxuczpyZGY9Imh0dHA6Ly93d3cudzMub3JnLzE5OTkvMDIvMjItcmRmLXN5bnRheC1ucyMiPiA8cmRmOkRlc2NyaXB0aW9uIHJkZjphYm91dD0iIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtbG5zOmRjPSJodHRwOi8vcHVybC5vcmcvZGMvZWxlbWVudHMvMS4xLyIgeG1sbnM6cGhvdG9zaG9wPSJodHRwOi8vbnMuYWRvYmUuY29tL3Bob3Rvc2hvcC8xLjAvIiB4bWxuczp4bXBNTT0iaHR0cDovL25zLmFkb2JlLmNvbS94YXAvMS4wL21tLyIgeG1sbnM6c3RFdnQ9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9zVHlwZS9SZXNvdXJjZUV2ZW50IyIgeG1wOkNyZWF0b3JUb29sPSJBZG9iZSBQaG90b3Nob3AgQ0MgMjAxOSAoTWFjaW50b3NoKSIgeG1wOkNyZWF0ZURhdGU9IjIwMjMtMDQtMzBUMTU6MTY6MzcrMDI6MDAiIHhtcDpNb2RpZnlEYXRlPSIyMDIzLTA0LTMwVDE1OjE5OjEwKzAyOjAwIiB4bXA6TWV0YWRhdGFEYXRlPSIyMDIzLTA0LTMwVDE1OjE5OjEwKzAyOjAwIiBkYzpmb3JtYXQ9ImltYWdlL3BuZyIgcGhvdG9zaG9wOkNvbG9yTW9kZT0iMyIgcGhvdG9zaG9wOklDQ1Byb2ZpbGU9InNSR0IgSUVDNjE5NjYtMi4xIiB4bXBNTTpJbnN0YW5jZUlEPSJ4bXAuaWlkOjI3ZGRlZmM0LWM1ODMtNDk0YS05MDJlLTM3N2U5YzdlYTRiOSIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDo5OGJlZGQzZi04ZDdkLTQzZmMtOWRiNC1mYjExYTVlMWU5NjIiIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDo5OGJlZGQzZi04ZDdkLTQzZmMtOWRiNC1mYjExYTVlMWU5NjIiPiA8eG1wTU06SGlzdG9yeT4gPHJkZjpTZXE+IDxyZGY6bGkgc3RFdnQ6YWN0aW9uPSJjcmVhdGVkIiBzdEV2dDppbnN0YW5jZUlEPSJ4bXAuaWlkOjk4YmVkZDNmLThkN2QtNDNmYy05ZGI0LWZiMTFhNWUxZTk2MiIgc3RFdnQ6d2hlbj0iMjAyMy0wNC0zMFQxNToxNjozNyswMjowMCIgc3RFdnQ6c29mdHdhcmVBZ2VudD0iQWRvYmUgUGhvdG9zaG9wIENDIDIwMTkgKE1hY2ludG9zaCkiLz4gPHJkZjpsaSBzdEV2dDphY3Rpb249InNhdmVkIiBzdEV2dDppbnN0YW5jZUlEPSJ4bXAuaWlkOjI3ZGRlZmM0LWM1ODMtNDk0YS05MDJlLTM3N2U5YzdlYTRiOSIgc3RFdnQ6d2hlbj0iMjAyMy0wNC0zMFQxNToxOToxMCswMjowMCIgc3RFdnQ6c29mdHdhcmVBZ2VudD0iQWRvYmUgUGhvdG9zaG9wIENDIDIwMTkgKE1hY2ludG9zaCkiIHN0RXZ0OmNoYW5nZWQ9Ii8iLz4gPC9yZGY6U2VxPiA8L3htcE1NOkhpc3Rvcnk+IDwvcmRmOkRlc2NyaXB0aW9uPiA8L3JkZjpSREY+IDwveDp4bXBtZXRhPiA8P3hwYWNrZXQgZW5kPSJyIj8+yMIIQAAAANJJREFUWIXtlsENhDAMBMdpAEqgJz7Xwz3kpIQrgQ7Mg5NWJxLkSCQeeUUrWQp4ZuONkZE/RwHewGj2uzYFGIAtWJ/AEWAOJ2pzuO7fdwEvYA0OIzVD0zyBm5G6sWnuwMm42JnmCuRMcjHNkGkuQM0oydMYVRPbRjVpmvY3zdw0C+Aeac6mOQFLpEnTPKimRzVJGk81qU9TSrNQzdg0m3l1fdolTbq1VPYud83E6Lh9TZ+medr+MbwBfY89H9MsQz2rME/aTDVpGk817+wn9+Hjs/kAcHprSkUJFdQAAAAASUVORK5CYII=');
+            // Create a simple circle texture for particles instead of loading an external image
+            const canvas = document.createElement('canvas');
+            canvas.width = 32;
+            canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            ctx.beginPath();
+            ctx.arc(16, 16, 14, 0, Math.PI * 2);
+            ctx.fillStyle = 'white';
+            ctx.fill();
+            
+            const texture = new THREE.CanvasTexture(canvas);
             
             // Create material for particles
             const material = new THREE.PointsMaterial({
-                size: 4, // Larger particles for better visibility
+                size: 4,
                 map: texture,
                 blending: THREE.AdditiveBlending,
                 depthTest: true,
@@ -446,19 +500,91 @@ export class TerrainRenderer {
             this.particleSystem = new THREE.Points(geometry, material);
             this.particleSystem.frustumCulled = false; // Disable frustum culling for better performance
             
-            // Convert the terrain mesh to world space
-            this.terrainMesh.updateMatrixWorld();
-            
             // Add to scene
             this.scene.add(this.particleSystem);
             
             // Start animation
             this.isAnimating = true;
             
+            // Store max flow for later use
+            this.maxFlowValue = maxFlow;
+            
             console.log(`Created particle system with ${particleCount} particles`);
         } catch (error) {
-            console.error("Error creating particle system:", error);
+            console.error("Error creating particle system:", error, error.stack);
+            // Don't try to create a minimal particle system - just disable water
+            this.isAnimating = false;
+            console.log("Disabled water animation due to errors");
         }
+    }
+    
+    // Initialize a single particle at a random position
+    initializeParticle(index, positions, colors, sizes, width, height, resolution, maxFlow) {
+        const scaleDown = this.terrainScale || 1.0;
+        const i3 = index * 3;
+        
+        let x, y;
+        
+        // Prefer spawning at stream spawn points if available
+        if (this.spawnPoints && this.spawnPoints.length > 0 && Math.random() < 0.8) {
+            // Pick a random spawn point
+            const spawnPoint = this.spawnPoints[Math.floor(Math.random() * this.spawnPoints.length)];
+            x = spawnPoint.x;
+            y = spawnPoint.y;
+        } else {
+            // Random position across the entire terrain
+            x = Math.floor(Math.random() * width);
+            y = Math.floor(Math.random() * height);
+        }
+        
+        // Get flow at this position
+        const flowIndex = y * width + x;
+        let flow = 0;
+        if (flowIndex >= 0 && flowIndex < this.flowData.length) {
+            flow = this.flowData[flowIndex];
+        }
+        
+        // Convert to world coordinates centered on the terrain
+        const worldX = (x / width) * width * resolution * scaleDown - (width * resolution * scaleDown / 2);
+        const worldZ = (y / height) * height * resolution * scaleDown - (height * resolution * scaleDown / 2);
+        
+        // Set a default height above terrain
+        let worldY = 5.0;
+        
+        // If we have terrain, get the actual height at this position
+        if (this.terrainMesh && this.terrainMetadata) {
+            try {
+                const skipFactor = this.terrainMetadata.skipFactor || 1;
+                const meshX = Math.floor(x / skipFactor);
+                const meshY = Math.floor(y / skipFactor);
+                const meshWidth = this.terrainMetadata.meshWidth;
+                
+                if (meshX >= 0 && meshX < this.terrainMetadata.meshWidth && 
+                    meshY >= 0 && meshY < this.terrainMetadata.meshHeight) {
+                    const vertexIndex = meshY * (meshWidth + 1) + meshX;
+                    
+                    if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
+                        worldY = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 5.0;
+                    }
+                }
+            } catch (error) {
+                // Just use default height
+            }
+        }
+        
+        // Set position
+        positions[i3] = worldX;
+        positions[i3 + 1] = worldY;
+        positions[i3 + 2] = worldZ;
+        
+        // Set color (blue water)
+        colors[i3] = 0.3;
+        colors[i3 + 1] = 0.7;
+        colors[i3 + 2] = 1.0;
+        
+        // Set size
+        const normalizedFlow = Math.min(1.0, flow / (maxFlow * 0.1));
+        sizes[index] = 2.0 + normalizedFlow * 4.0;
     }
     
     updateParticles() {
@@ -466,7 +592,6 @@ export class TerrainRenderer {
         
         const [width, height, resolution] = this.dimensions;
         const scaleDown = this.terrainScale || 1.0;
-        const heightScale = this.heightScale || 2.0 * scaleDown;
         const skipFactor = this.terrainMetadata?.skipFactor || 1;
         
         // Get particle system properties
@@ -474,189 +599,107 @@ export class TerrainRenderer {
         const colors = this.particleSystem.geometry.attributes.color.array;
         const sizes = this.particleSystem.geometry.attributes.size.array;
         
-        // Update particle system properties based on flow
-        const maxFlow = Math.max(...this.flowData);
+        // Use the stored max flow value instead of recalculating
+        const maxFlow = this.maxFlowValue || 0.1;
+        
         const particleCount = positions.length / 3;
         const speedMultiplier = this.flowSpeed || 1.0;
         
-        for (let i = 0; i < particleCount; i++) {
-            // Calculate indices
-            const i3 = i * 3;
+        // Update a random subset of particles each frame for better performance
+        const updateCount = Math.min(1000, particleCount);
+        
+        for (let i = 0; i < updateCount; i++) {
+            // Pick a random particle to update
+            const particleIndex = Math.floor(Math.random() * particleCount);
+            const i3 = particleIndex * 3;
             
             // Update lifecycle
-            this.particleLifecycles[i] -= 1;
+            this.particleLifecycles[particleIndex] -= 1;
             
             // If particle has reached end of life, respawn it
-            if (this.particleLifecycles[i] <= 0) {
-                this.respawnParticle(i, positions, colors, sizes, width, height, resolution, maxFlow);
-                this.particleLifecycles[i] = this.particleLifetime;
+            if (this.particleLifecycles[particleIndex] <= 0) {
+                this.initializeParticle(particleIndex, positions, colors, sizes, width, height, resolution, maxFlow);
+                this.particleLifecycles[particleIndex] = this.particleLifetime;
                 continue;
             }
             
-            // Get current world position
+            // Get current position
             const worldX = positions[i3];
             const worldY = positions[i3 + 1];
             const worldZ = positions[i3 + 2];
             
             // Convert to grid coordinates
-            // Map from [-width/2, width/2] to [0, width]
             const gridX = Math.round(((worldX / (width * resolution * scaleDown)) * width) + (width / 2));
             const gridZ = Math.round(((worldZ / (height * resolution * scaleDown)) * height) + (height / 2));
             
             // Skip if out of bounds
             if (gridX < 0 || gridX >= width || gridZ < 0 || gridZ >= height) {
-                this.respawnParticle(i, positions, colors, sizes, width, height, resolution, maxFlow);
-                this.particleLifecycles[i] = this.particleLifetime;
+                this.initializeParticle(particleIndex, positions, colors, sizes, width, height, resolution, maxFlow);
+                this.particleLifecycles[particleIndex] = this.particleLifetime;
                 continue;
             }
             
-            // Get flow info at this position
-            const flowIndex = gridZ * width + gridX;
-            
+            // Simplified flow calculation - just move downhill
             let velocityX = 0;
             let velocityZ = 0;
-            let speed = 0;
+            let speed = 0.1;  // default speed
             
-            // If we have velocity data, use it (now with proper vector format)
-            if (this.velocityData && flowIndex * 2 + 1 < this.velocityData.length) {
-                // Get x and y velocity components from the velocity array
-                // Each cell has two values (x,y) in adjacent indices
-                velocityX = this.velocityData[flowIndex * 2];     // x component
-                velocityZ = this.velocityData[flowIndex * 2 + 1]; // y component
+            // Find neighboring cell with lowest elevation
+            let lowestNeighborX = gridX;
+            let lowestNeighborZ = gridZ;
+            let lowestElevation = Infinity;
+            
+            // Check cardinal directions
+            const directions = [
+                {dx: 0, dz: 1},   // North
+                {dx: 1, dz: 0},   // East
+                {dx: 0, dz: -1},  // South
+                {dx: -1, dz: 0},  // West
+            ];
+            
+            // Find lowest neighbor
+            for (const {dx, dz} of directions) {
+                const neighborX = gridX + dx;
+                const neighborZ = gridZ + dz;
                 
-                // Calculate speed from velocity components
-                speed = Math.sqrt(velocityX * velocityX + velocityZ * velocityZ);
+                if (neighborX < 0 || neighborX >= width || neighborZ < 0 || neighborZ >= height) continue;
                 
-                // If speed is too low, use terrain-based flow direction
-                if (speed < 0.01) {
-                    // Fall back to terrain-based flow
-                    let lowestNeighborX = gridX;
-                    let lowestNeighborZ = gridZ;
-                    let lowestElevation = Infinity;
+                const meshX = Math.floor(neighborX / skipFactor);
+                const meshY = Math.floor(neighborZ / skipFactor);
+                const meshWidth = this.terrainMetadata?.meshWidth || width;
+                const vertexIndex = meshY * (meshWidth + 1) + meshX;
+                
+                if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
+                    const elevation = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
                     
-                    // Sample a few key directions rather than all 8 neighbors for performance
-                    const directions = [
-                        {dx: 0, dz: 1},   // North
-                        {dx: 1, dz: 0},   // East
-                        {dx: 0, dz: -1},  // South
-                        {dx: -1, dz: 0},  // West
-                    ];
-                    
-                    for (const {dx, dz} of directions) {
-                        // Rest of the neighbor checking code stays the same
-                        const neighborX = gridX + dx;
-                        const neighborZ = gridZ + dz;
-                        
-                        if (neighborX < 0 || neighborX >= width || neighborZ < 0 || neighborZ >= height) continue;
-                        
-                        // Calculate the vertex index in our decimated mesh
-                        const meshX = Math.floor(neighborX / skipFactor);
-                        const meshY = Math.floor(neighborZ / skipFactor);
-                        const meshWidth = this.terrainMetadata?.meshWidth || width;
-                        const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                        
-                        if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                            const elevation = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
-                            
-                            if (elevation < lowestElevation) {
-                                lowestElevation = elevation;
-                                lowestNeighborX = neighborX;
-                                lowestNeighborZ = neighborZ;
-                            }
-                        }
+                    if (elevation < lowestElevation) {
+                        lowestElevation = elevation;
+                        lowestNeighborX = neighborX;
+                        lowestNeighborZ = neighborZ;
                     }
-                    
-                    // Calculate velocity towards lowest neighbor
-                    velocityX = (lowestNeighborX - gridX);
-                    velocityZ = (lowestNeighborZ - gridZ);
-                    
-                    // Normalize to unit length
-                    const length = Math.sqrt(velocityX * velocityX + velocityZ * velocityZ);
-                    if (length > 0) {
-                        velocityX /= length;
-                        velocityZ /= length;
-                    }
-                    
-                    // Set a default speed based on slope
-                    if (this.slopeData && flowIndex < this.slopeData.length) {
-                        speed = this.slopeData[flowIndex] * 0.2;
-                    } else {
-                        speed = 0.05; // Default constant speed
-                    }
-                }
-            } else {
-                // No velocity data or out of bounds - fall back to terrain-based flow
-                // Find neighboring cell with lowest elevation
-                let lowestNeighborX = gridX;
-                let lowestNeighborZ = gridZ;
-                let lowestElevation = Infinity;
-                
-                // Sample a few key directions rather than all 8 neighbors for performance
-                const directions = [
-                    {dx: 0, dz: 1},   // North
-                    {dx: 1, dz: 0},   // East
-                    {dx: 0, dz: -1},  // South
-                    {dx: -1, dz: 0},  // West
-                ];
-                
-                for (const {dx, dz} of directions) {
-                    const neighborX = gridX + dx;
-                    const neighborZ = gridZ + dz;
-                    
-                    if (neighborX < 0 || neighborX >= width || neighborZ < 0 || neighborZ >= height) continue;
-                    
-                    // Calculate the vertex index in our decimated mesh
-                    const meshX = Math.floor(neighborX / skipFactor);
-                    const meshY = Math.floor(neighborZ / skipFactor);
-                    const meshWidth = this.terrainMetadata?.meshWidth || width;
-                    const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                    
-                    if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                        const elevation = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
-                        
-                        if (elevation < lowestElevation) {
-                            lowestElevation = elevation;
-                            lowestNeighborX = neighborX;
-                            lowestNeighborZ = neighborZ;
-                        }
-                    }
-                }
-                
-                // Calculate velocity towards lowest neighbor
-                velocityX = (lowestNeighborX - gridX);
-                velocityZ = (lowestNeighborZ - gridZ);
-                
-                // Normalize to unit length
-                const length = Math.sqrt(velocityX * velocityX + velocityZ * velocityZ);
-                if (length > 0) {
-                    velocityX /= length;
-                    velocityZ /= length;
-                }
-                
-                // Scale by slope for speed
-                if (this.slopeData && flowIndex < this.slopeData.length) {
-                    speed = this.slopeData[flowIndex] * 0.2;
-                } else {
-                    speed = 0.05; // Default constant speed
                 }
             }
             
-            // Apply velocity to position
-            const moveX = velocityX * speed * speedMultiplier;
-            const moveZ = velocityZ * speed * speedMultiplier;
+            // Calculate movement direction
+            velocityX = (lowestNeighborX - gridX);
+            velocityZ = (lowestNeighborZ - gridZ);
+            
+            // Normalize direction
+            const length = Math.sqrt(velocityX * velocityX + velocityZ * velocityZ);
+            if (length > 0) {
+                velocityX /= length;
+                velocityZ /= length;
+            }
             
             // Move the particle
-            positions[i3] += moveX;
-            positions[i3 + 2] += moveZ;
+            positions[i3] += velocityX * speed * speedMultiplier;
+            positions[i3 + 2] += velocityZ * speed * speedMultiplier;
             
-            // Get new height at the updated position
-            // Convert back to grid coordinates to sample height
+            // Update height at the new position
             const newGridX = Math.round(((positions[i3] / (width * resolution * scaleDown)) * width) + (width / 2));
             const newGridZ = Math.round(((positions[i3 + 2] / (height * resolution * scaleDown)) * height) + (height / 2));
             
-            // Update height at the new position
             if (newGridX >= 0 && newGridX < width && newGridZ >= 0 && newGridZ < height) {
-                // Calculate the vertex index in our decimated mesh
                 const meshX = Math.floor(newGridX / skipFactor);
                 const meshY = Math.floor(newGridZ / skipFactor);
                 const meshWidth = this.terrainMetadata?.meshWidth || width;
@@ -664,123 +707,13 @@ export class TerrainRenderer {
                 
                 if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
                     const height = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
-                    positions[i3 + 1] = height + 5.0; // Offset above terrain for visibility
+                    positions[i3 + 1] = height + 5.0;
                 }
-            }
-            
-            // Check if particle has reached the edge of the terrain and respawn if necessary
-            if (newGridX < 0 || newGridX >= width || newGridZ < 0 || newGridZ >= height) {
-                this.respawnParticle(i, positions, colors, sizes, width, height, resolution, maxFlow);
-                this.particleLifecycles[i] = this.particleLifetime;
             }
         }
         
         // Update the geometry
         this.particleSystem.geometry.attributes.position.needsUpdate = true;
-        this.particleSystem.geometry.attributes.color.needsUpdate = true;
-        this.particleSystem.geometry.attributes.size.needsUpdate = true;
-    }
-    
-    // Helper method to respawn a particle
-    respawnParticle(index, positions, colors, sizes, width, height, resolution, maxFlow) {
-        try {
-            const scaleDown = this.terrainScale || 1.0;
-            const heightScale = this.heightScale || 2.0 * scaleDown; // Match terrain height
-            const skipFactor = this.terrainMetadata?.skipFactor || 1;
-
-            // Calculate the 3D array index from the particle index
-            const i3 = index * 3;
-            
-            let x, y;
-            
-            // Prefer spawning at stream spawn points if available
-            if (this.spawnPoints && this.spawnPoints.length > 0 && Math.random() < 0.8) {
-                // Pick a random spawn point
-                const spawnPoint = this.spawnPoints[Math.floor(Math.random() * this.spawnPoints.length)];
-                x = spawnPoint.x;
-                y = spawnPoint.y;
-            } else {
-                // Random position across the entire terrain
-                x = Math.floor(Math.random() * width);
-                y = Math.floor(Math.random() * height);
-            }
-            
-            // Get flow at this position
-            const flowIndex = y * width + x;
-            let flow = 0;
-            if (flowIndex >= 0 && flowIndex < this.flowData.length) {
-                flow = this.flowData[flowIndex];
-            }
-            
-            // Only spawn particle if there's enough flow
-            if (flow < maxFlow * 0.001 && Math.random() < 0.5) {
-                // Try again with a different location
-                return this.respawnParticle(index, positions, colors, sizes, width, height, resolution, maxFlow);
-            }
-            
-            // Convert to world coordinates centered on the terrain
-            // Map from [0, width] to [-width/2, width/2]
-            const worldX = (x / width) * width * resolution * scaleDown - (width * resolution * scaleDown / 2);
-            const worldZ = (y / height) * height * resolution * scaleDown - (height * resolution * scaleDown / 2);
-            
-            // Get height at this position (add small offset to avoid z-fighting)
-            let worldY = 5.0; // Default height above terrain if we can't sample
-            
-            // If we have terrain, get the actual height at this position
-            if (this.terrainMesh && this.terrainMetadata) {
-                try {
-                    // Sample height from the terrain mesh accounting for decimated mesh
-                    const meshX = Math.floor(x / skipFactor);
-                    const meshY = Math.floor(y / skipFactor);
-                    const meshWidth = this.terrainMetadata.meshWidth;
-                    
-                    // Make sure indices are within bounds
-                    if (meshX >= 0 && meshX < this.terrainMetadata.meshWidth && 
-                        meshY >= 0 && meshY < this.terrainMetadata.meshHeight) {
-                        const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                        
-                        if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                            worldY = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 5.0; // Larger offset for visibility
-                        }
-                    }
-                } catch (error) {
-                    console.warn("Error sampling terrain height:", error);
-                }
-            }
-            
-            // Set position
-            positions[i3] = worldX;
-            positions[i3 + 1] = worldY;
-            positions[i3 + 2] = worldZ;
-            
-            // Set color based on flow (bright blue with varied alpha)
-            colors[i3] = 0.3;     // More blue
-            colors[i3 + 1] = 0.7;  // More vibrant
-            colors[i3 + 2] = 1.0;  // Full blue
-            
-            // Set size based on flow
-            const normalizedFlow = Math.min(1.0, flow / (maxFlow * 0.1));
-            sizes[index] = 2.0 + normalizedFlow * 4.0; // Larger particles based on flow
-        } catch (error) {
-            console.error("Error respawning particle:", error);
-            
-            // Set some safe default values in case of error
-            if (positions && i3 < positions.length) {
-                positions[i3] = 0;
-                positions[i3 + 1] = 0;
-                positions[i3 + 2] = 0;
-            }
-            
-            if (colors && i3 < colors.length) {
-                colors[i3] = 0.3;
-                colors[i3 + 1] = 0.7;
-                colors[i3 + 2] = 1.0;
-            }
-            
-            if (sizes && index < sizes.length) {
-                sizes[index] = 2.0;
-            }
-        }
     }
     
     createStreamLines() {
