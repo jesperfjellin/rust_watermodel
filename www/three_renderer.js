@@ -28,7 +28,7 @@ export class TerrainRenderer {
         
         // Data storage
         this.terrainMesh = null;
-        this.particleSystem = null;
+        this.particleSystem = null; // We keep this reference but won't create it
         this.streamLines = null;
         
         // Stats
@@ -39,13 +39,14 @@ export class TerrainRenderer {
         this.velocityData = null;
         this.spawnPoints = null;
         
-        // Animation
+        // Animation - we disable particle animation
         this.isAnimating = false;
-        this.particleLifecycles = null;
-        this.particleLifetime = 300; // frames
+        this.showWater = false;
+        
+        // Stream pulse animation
+        this.pulseObjects = [];
+        this.pulseAnimations = [];
         this.flowSpeed = 1.0; // speed multiplier
-        this.particleDensity = 10000; // desired number of particles
-        this.showWater = true; // whether water particles are visible
         
         // Setup resize handler
         window.addEventListener('resize', () => this.resize());
@@ -85,15 +86,9 @@ export class TerrainRenderer {
         // Update controls
         this.controls.update();
         
-        // Update particle positions if we have a flow model
-        if (this.isAnimating && this.particleSystem && this.showWater) {
-            try {
-                this.updateParticles();
-            } catch (error) {
-                console.error("Animation error:", error);
-                // Disable animation on error to prevent endless error logs
-                this.isAnimating = false;
-            }
+        // Update pulse animations for stream flow
+        if (this.streamLines && this.pulseObjects) {
+            this.updatePulses();
         }
         
         // Render the scene
@@ -143,6 +138,44 @@ export class TerrainRenderer {
         let minHeight = Infinity;
         let maxHeight = -Infinity;
         
+        // Find an average elevation to use as a base level for no-data areas
+        let validElevations = [];
+        let avgElevation = 0;
+        
+        // First pass: collect valid elevations
+        for (let y = 0; y < meshHeight; y++) {
+            for (let x = 0; x < meshWidth; x++) {
+                // Map mesh coordinates to original DEM coordinates
+                const demX = Math.min(width - 1, x * skipFactor);
+                const demY = Math.min(height - 1, y * skipFactor);
+                const demIndex = demY * width + demX;
+                
+                // Get elevation
+                const elevation = terrainData[demIndex];
+                
+                // Only consider valid elevations (not NaN or negative)
+                if (!isNaN(elevation) && elevation >= 0) {
+                    validElevations.push(elevation);
+                    minHeight = Math.min(minHeight, elevation);
+                    maxHeight = Math.max(maxHeight, elevation);
+                }
+            }
+        }
+        
+        // Calculate average elevation from valid values
+        if (validElevations.length > 0) {
+            avgElevation = validElevations.reduce((a, b) => a + b, 0) / validElevations.length;
+        } else {
+            // Fallback if no valid elevations found
+            avgElevation = 0;
+            minHeight = 0;
+            maxHeight = 0;
+        }
+        
+        console.log(`Terrain elevation range: ${minHeight} to ${maxHeight}`);
+        console.log(`Average elevation: ${avgElevation}`);
+        
+        // Second pass: set elevations, replacing invalid values with slightly below the min valid height
         for (let y = 0; y < meshHeight; y++) {
             for (let x = 0; x < meshWidth; x++) {
                 // Map mesh coordinates to original DEM coordinates
@@ -151,23 +184,22 @@ export class TerrainRenderer {
                 const demIndex = demY * width + demX;
                 const vertexIndex = y * (meshWidth + 1) + x;
                 
-                // Get elevation and update min/max
-                const elevation = terrainData[demIndex];
-                if (!isNaN(elevation)) {
-                    minHeight = Math.min(minHeight, elevation);
-                    maxHeight = Math.max(maxHeight, elevation);
+                // Get elevation and filter out invalid values
+                let elevation = terrainData[demIndex];
+                
+                // If invalid elevation (negative or NaN), use slightly below minHeight
+                if (isNaN(elevation) || elevation < 0) {
+                    elevation = minHeight - 10; // Set clearly below valid terrain
                 }
                 
                 // Set Z value for this vertex (using stronger height exaggeration)
                 if (vertexIndex < geometry.attributes.position.count) {
                     // Increase the height exaggeration factor significantly for better visibility
-                    const heightScale = 2.0 * scaleDown; // 10x increased from previous 0.2
+                    const heightScale = 2.0 * scaleDown; 
                     geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
                 }
             }
         }
-        
-        console.log(`Terrain elevation range: ${minHeight} to ${maxHeight}`);
         
         // Update the geometry
         geometry.attributes.position.needsUpdate = true;
@@ -218,7 +250,7 @@ export class TerrainRenderer {
         console.log("Terrain dimensions:", width * resolution * scaleDown, "x", height * resolution * scaleDown);
         console.log("Scale factor applied:", scaleDown);
         
-        // Store scale factor for particles and other elements
+        // Store scale factor for other elements
         this.terrainScale = scaleDown;
         this.heightScale = 2.0 * scaleDown; // Update the heightScale to match the exaggeration
     }
@@ -230,7 +262,7 @@ export class TerrainRenderer {
             this.flowData = waterData.flow_accumulation || [];
             this.slopeData = waterData.slopes || [];
             
-            // Handle velocities data which might be in a different format
+            // Store velocities data but don't create particles
             if (waterData.velocities) {
                 // Make sure velocities data is an array
                 if (Array.isArray(waterData.velocities)) {
@@ -243,8 +275,8 @@ export class TerrainRenderer {
                 this.velocityData = [];
             }
             
-            // Create particles for water flow visualization
-            this.createParticleSystem();
+            // We no longer create particles - pulses are our primary animation
+            // this.createParticleSystem();
         } catch (error) {
             console.error("Error processing water visualization data:", error);
         }
@@ -275,30 +307,52 @@ export class TerrainRenderer {
     setStreamPolylines(polylines) {
         if (!polylines || !this.dimensions) return;
         
-        // Clean up previous lines
+        // Clean up previous lines and pulses
         if (this.streamLines) {
             this.scene.remove(this.streamLines);
             this.streamLines = null;
         }
         
+        // Clean up animation timers
+        if (this.pulseAnimations) {
+            for (const timer of this.pulseAnimations) {
+                clearInterval(timer);
+            }
+            this.pulseAnimations = [];
+        }
+        
         const [width, height, resolution] = this.dimensions;
         const scaleDown = this.terrainScale || 1.0;
-        const heightScale = this.heightScale || 0.2 * scaleDown;
         
         // Create a group for all stream lines
         this.streamLines = new THREE.Group();
         
-        // Material for stream lines
-        const material = new THREE.LineBasicMaterial({
+        // Material for stream lines - slightly transparent blue
+        const lineMaterial = new THREE.LineBasicMaterial({
             color: 0x0088ff,
-            linewidth: 1,
-            opacity: 0.8,
+            linewidth: 3.0,
+            opacity: 1,
             transparent: true
         });
         
+        // Material for pulse segments - brighter blue
+        const pulseMaterial = new THREE.LineBasicMaterial({
+            color: 0x00aaff,
+            linewidth: 2,
+            opacity: 0.9,
+            transparent: true
+        });
+        
+        // Store pulse objects for animation
+        this.pulseObjects = [];
+        this.streamPathData = [];
+        
         // Create a line for each stream polyline
         for (const polyline of polylines) {
+            if (polyline.length < 2) continue; // Skip too short lines
+            
             const points = [];
+            const worldPoints = []; // Store actual positions for pulse animation
             
             // Convert from grid coordinates to world coordinates and add points
             for (let i = 0; i < polyline.length; i++) {
@@ -311,13 +365,11 @@ export class TerrainRenderer {
                 // Get the height at this position
                 const terrainX = Math.floor(x);
                 const terrainY = Math.floor(y);
-                const terrainIndex = terrainY * width + terrainX;
                 let terrainHeight = 0;
                 
-                if (terrainIndex >= 0 && terrainIndex < this.dimensions[0] * this.dimensions[1]) {
-                    // Get height from terrain data if available
-                    if (this.terrainMesh && this.terrainMetadata) {
-                        // Calculate the corresponding vertex in our decimated mesh
+                if (this.terrainMesh && this.terrainMetadata) {
+                    try {
+                        // Calculate vertex in decimated mesh
                         const skipFactor = this.terrainMetadata.skipFactor || 1;
                         const meshX = Math.floor(terrainX / skipFactor);
                         const meshY = Math.floor(terrainY / skipFactor);
@@ -327,37 +379,179 @@ export class TerrainRenderer {
                         if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
                             terrainHeight = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 0.5;
                         }
+                    } catch (e) {
+                        // Just use default height
                     }
                 }
                 
-                // Add the point with a small offset above the terrain
-                points.push(new THREE.Vector3(worldX, terrainHeight, worldZ));
+                // Create the point
+                const point = new THREE.Vector3(worldX, terrainHeight, worldZ);
+                points.push(point);
+                worldPoints.push({x: worldX, y: terrainHeight, z: worldZ});
             }
             
-            // Create the line geometry
+            // Create the line geometry for the stream
             const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const line = new THREE.Line(geometry, material);
+            const line = new THREE.Line(geometry, lineMaterial);
             
             // Add to the group
             this.streamLines.add(line);
+            
+            // Add this path to our stream data for pulse animations
+            this.streamPathData.push(worldPoints);
         }
         
         // Add all stream lines to the scene
         this.scene.add(this.streamLines);
         console.log(`Created ${polylines.length} stream lines`);
+        
+        // Setup pulses on the longer stream paths
+        this.setupStreamPulses();
+    }
+    
+    // Create and animate pulse effects along stream paths
+    setupStreamPulses() {
+        // Clear any existing pulse objects
+        for (const pulse of this.pulseObjects || []) {
+            this.streamLines.remove(pulse.object);
+        }
+        this.pulseObjects = [];
+        
+        // Create pulse animations only for longer streams
+        const significantStreams = this.streamPathData.filter(path => path.length > 10)
+                                  .sort((a, b) => b.length - a.length) // Sort by length, longest first
+                                  .slice(0, 30); // Take top 30 streams (increased from 20)
+        
+        // Create multiple initial pulses for each significant stream
+        for (const path of significantStreams) {
+            // Create 2-3 pulses per stream initially
+            const pulseCount = 1 + Math.floor(Math.random() * 2);
+            for (let i = 0; i < pulseCount; i++) {
+                // Space them out along the stream
+                const startPosition = Math.floor(Math.random() * (path.length / pulseCount)) 
+                                    + Math.floor((path.length / pulseCount) * i);
+                this.createPulseOnPath(path, startPosition);
+            }
+        }
+        
+        // Start the animation loop for pulse movement
+        const speedFactor = this.flowSpeed || 1.0;
+        this.pulseAnimations = [];
+        
+        // Create an interval that periodically creates new pulses
+        const pulseTimer = setInterval(() => {
+            // Create new pulses more frequently
+            if (this.streamLines && Math.random() < 0.3) { // Increased probability (was 0.2)
+                // Choose a random significant stream
+                const randomPath = significantStreams[Math.floor(Math.random() * significantStreams.length)];
+                this.createPulseOnPath(randomPath, 0); // Start at beginning
+            }
+        }, 400 / speedFactor); // Create pulses more frequently (was 500)
+        
+        this.pulseAnimations.push(pulseTimer);
+    }
+    
+    // Modified to accept a starting position
+    createPulseOnPath(path, startIndex = 0) {
+        if (path.length < 5) return; // Path too short
+        
+        // Determine pulse segment length (about 8-15% of total path length)
+        const pulseLength = Math.max(3, Math.floor(path.length * 0.1)); // Increased from 5%
+        
+        // Create pulse segment
+        const pulseSegment = this.createPulseSegment(path, startIndex, pulseLength);
+        
+        if (pulseSegment) {
+            // Add to stream lines group
+            this.streamLines.add(pulseSegment);
+            
+            // Store pulse data for animation
+            const pulseData = {
+                object: pulseSegment,
+                path: path,
+                currentIndex: startIndex,
+                length: pulseLength,
+                speed: 0.15 + Math.random() * 0.2 // Slightly faster (was 0.1)
+            };
+            
+            this.pulseObjects.push(pulseData);
+        }
+    }
+    
+    // Create more noticeable pulse segments
+    createPulseSegment(path, startIndex, length) {
+        if (startIndex + length >= path.length) return null;
+        
+        // Create points for the pulse segment
+        const pulsePoints = [];
+        for (let i = startIndex; i < startIndex + length && i < path.length; i++) {
+            const point = path[i];
+            pulsePoints.push(new THREE.Vector3(point.x, point.y + 1.5, point.z)); // Raised higher for visibility
+        }
+        
+        // Create the line geometry for the pulse segment
+        const geometry = new THREE.BufferGeometry().setFromPoints(pulsePoints);
+        
+        // Create brighter, thicker blue material for better visibility
+        const material = new THREE.LineBasicMaterial({
+            color: 0x30ffff, // Brighter cyan-blue
+            linewidth: 4,    // Thicker line (note: WebGL may limit actual thickness)
+            opacity: 1.0,    // Fully opaque
+            transparent: true
+        });
+        
+        return new THREE.Line(geometry, material);
+    }
+    
+    // Update pulse animations
+    updatePulses() {
+        if (!this.pulseObjects || !this.streamLines) return;
+        
+        const speedFactor = this.flowSpeed || 1.0;
+        const pulsesToRemove = [];
+        
+        for (let i = 0; i < this.pulseObjects.length; i++) {
+            const pulse = this.pulseObjects[i];
+            
+            // Move pulse forward
+            pulse.currentIndex += pulse.speed * speedFactor;
+            
+            // If pulse has reached the end of the path, mark for removal
+            if (pulse.currentIndex + pulse.length >= pulse.path.length) {
+                pulsesToRemove.push(i);
+                this.streamLines.remove(pulse.object);
+                continue;
+            }
+            
+            // Update the pulse segment position
+            const pulsePoints = [];
+            for (let j = Math.floor(pulse.currentIndex); j < Math.floor(pulse.currentIndex) + pulse.length && j < pulse.path.length; j++) {
+                const point = pulse.path[j];
+                pulsePoints.push(new THREE.Vector3(point.x, point.y + 0.5, point.z));
+            }
+            
+            // Update geometry
+            pulse.object.geometry.dispose(); // Clean up old geometry
+            pulse.object.geometry = new THREE.BufferGeometry().setFromPoints(pulsePoints);
+        }
+        
+        // Remove pulses that have completed their path
+        for (let i = pulsesToRemove.length - 1; i >= 0; i--) {
+            this.pulseObjects.splice(pulsesToRemove[i], 1);
+        }
     }
     
     // For backward compatibility
     setFlowData(flowData) {
         this.flowData = flowData;
         
-        if (!this.velocityData) {
-            // Create a simplified velocity field based on flow only
-            this.velocityData = flowData.map(flow => Math.log1p(flow) * 0.1);
-        }
+        // We no longer need to create particles
+        // if (!this.velocityData) {
+        //     // Create a simplified velocity field based on flow only
+        //     this.velocityData = flowData.map(flow => Math.log1p(flow) * 0.1);
+        // }
         
-        // Create particles for water flow visualization
-        this.createParticleSystem();
+        // this.createParticleSystem();
     }
     
     // For backward compatibility
@@ -368,7 +562,28 @@ export class TerrainRenderer {
         this.createStreamLines();
     }
     
-    // Toggle water visibility
+    // Toggle flow animation visibility
+    toggleFlowAnimation(visible) {
+        if (this.streamLines) {
+            this.streamLines.visible = visible;
+        }
+        
+        // Stop/start pulse creation based on visibility
+        if (this.pulseAnimations) {
+            // Clear existing timers
+            for (const timer of this.pulseAnimations) {
+                clearInterval(timer);
+            }
+            this.pulseAnimations = [];
+            
+            // If visible, restart pulse animations
+            if (visible && this.streamPathData) {
+                this.setupStreamPulses();
+            }
+        }
+    }
+    
+    // Toggle water visibility (keeping for backward compatibility)
     toggleWaterVisibility(visible) {
         this.showWater = visible;
         if (this.particleSystem) {
@@ -479,16 +694,23 @@ export class TerrainRenderer {
             canvas.width = 32;
             canvas.height = 32;
             const ctx = canvas.getContext('2d');
+            
+            // Create a radial gradient for a more water-like appearance
+            const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
+            gradient.addColorStop(0, 'rgba(50, 150, 255, 1.0)'); // Bright blue center
+            gradient.addColorStop(0.5, 'rgba(30, 100, 255, 0.8)'); // Mid blue
+            gradient.addColorStop(1, 'rgba(0, 50, 255, 0)'); // Transparent edges
+            
             ctx.beginPath();
-            ctx.arc(16, 16, 14, 0, Math.PI * 2);
-            ctx.fillStyle = 'white';
+            ctx.arc(16, 16, 16, 0, Math.PI * 2);
+            ctx.fillStyle = gradient;
             ctx.fill();
             
             const texture = new THREE.CanvasTexture(canvas);
             
             // Create material for particles
             const material = new THREE.PointsMaterial({
-                size: 4,
+                size: 6, // Slightly larger particles for better visibility
                 map: texture,
                 blending: THREE.AdditiveBlending,
                 depthTest: true,
@@ -524,25 +746,32 @@ export class TerrainRenderer {
         const i3 = index * 3;
         
         let x, y;
-        
-        // Prefer spawning at stream spawn points if available
-        if (this.spawnPoints && this.spawnPoints.length > 0 && Math.random() < 0.8) {
-            // Pick a random spawn point
-            const spawnPoint = this.spawnPoints[Math.floor(Math.random() * this.spawnPoints.length)];
-            x = spawnPoint.x;
-            y = spawnPoint.y;
-        } else {
-            // Random position across the entire terrain
-            x = Math.floor(Math.random() * width);
-            y = Math.floor(Math.random() * height);
-        }
-        
-        // Get flow at this position
-        const flowIndex = y * width + x;
         let flow = 0;
-        if (flowIndex >= 0 && flowIndex < this.flowData.length) {
-            flow = this.flowData[flowIndex];
-        }
+        let attempts = 0;
+        const maxAttempts = 5; // Try a few times to find a good flow spot
+        
+        // Try to find a spot with good flow
+        do {
+            // Prefer spawning at stream spawn points with very high probability
+            if (this.spawnPoints && this.spawnPoints.length > 0 && Math.random() < 0.9) {
+                // Pick a random spawn point
+                const spawnPoint = this.spawnPoints[Math.floor(Math.random() * this.spawnPoints.length)];
+                x = spawnPoint.x;
+                y = spawnPoint.y;
+            } else {
+                // Random position across the entire terrain
+                x = Math.floor(Math.random() * width);
+                y = Math.floor(Math.random() * height);
+            }
+            
+            // Get flow at this position
+            const flowIndex = y * width + x;
+            if (flowIndex >= 0 && flowIndex < this.flowData.length) {
+                flow = this.flowData[flowIndex];
+            }
+            
+            attempts++;
+        } while (flow < maxFlow * 0.01 && attempts < maxAttempts);
         
         // Convert to world coordinates centered on the terrain
         const worldX = (x / width) * width * resolution * scaleDown - (width * resolution * scaleDown / 2);
@@ -564,7 +793,7 @@ export class TerrainRenderer {
                     const vertexIndex = meshY * (meshWidth + 1) + meshX;
                     
                     if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                        worldY = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 5.0;
+                        worldY = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 4.0;
                     }
                 }
             } catch (error) {
@@ -577,14 +806,15 @@ export class TerrainRenderer {
         positions[i3 + 1] = worldY;
         positions[i3 + 2] = worldZ;
         
-        // Set color (blue water)
-        colors[i3] = 0.3;
-        colors[i3 + 1] = 0.7;
-        colors[i3 + 2] = 1.0;
+        // Set color based on flow intensity
+        const flowIntensity = Math.min(1.0, Math.log(flow + 1) / Math.log(maxFlow + 1));
+        colors[i3] = 0.2 + flowIntensity * 0.2;     // Red component
+        colors[i3 + 1] = 0.5 + flowIntensity * 0.3;  // Green component
+        colors[i3 + 2] = 0.8 + flowIntensity * 0.2;  // Blue component
         
-        // Set size
-        const normalizedFlow = Math.min(1.0, flow / (maxFlow * 0.1));
-        sizes[index] = 2.0 + normalizedFlow * 4.0;
+        // Set size based on flow with a better scale
+        const normalizedFlow = Math.min(1.0, flow / (maxFlow * 0.05)); // More sensitivity to flow differences
+        sizes[index] = 3.0 + normalizedFlow * 6.0; // Base size 3.0, max growth to 9.0
     }
     
     updateParticles() {
@@ -605,8 +835,9 @@ export class TerrainRenderer {
         const particleCount = positions.length / 3;
         const speedMultiplier = this.flowSpeed || 1.0;
         
-        // Update a random subset of particles each frame for better performance
-        const updateCount = Math.min(1000, particleCount);
+        // Update a subset of particles each frame for better performance
+        // But update more of them for smoother animation
+        const updateCount = Math.min(2000, particleCount);
         
         for (let i = 0; i < updateCount; i++) {
             // Pick a random particle to update
@@ -639,25 +870,43 @@ export class TerrainRenderer {
                 continue;
             }
             
-            // Simplified flow calculation - just move downhill
+            // Get flow accumulation at this location
+            const flowIndex = gridZ * width + gridX;
+            let flow = 0;
+            if (flowIndex >= 0 && flowIndex < this.flowData.length) {
+                flow = this.flowData[flowIndex];
+            }
+            
+            // If very low flow, increase chances of respawning (helps concentrate particles on streams)
+            if (flow < maxFlow * 0.01 && Math.random() < 0.1) {
+                this.initializeParticle(particleIndex, positions, colors, sizes, width, height, resolution, maxFlow);
+                this.particleLifecycles[particleIndex] = this.particleLifetime;
+                continue;
+            }
+            
+            // Find vector to lowest neighbor for flow direction
             let velocityX = 0;
             let velocityZ = 0;
-            let speed = 0.1;  // default speed
+            let speed = 0.2 + (flow / maxFlow) * 0.8;  // Faster in high-flow areas
             
-            // Find neighboring cell with lowest elevation
+            // Find lowest neighboring cell for flow direction
             let lowestNeighborX = gridX;
             let lowestNeighborZ = gridZ;
             let lowestElevation = Infinity;
             
-            // Check cardinal directions
+            // Check all 8 neighboring directions for better flow
             const directions = [
-                {dx: 0, dz: 1},   // North
-                {dx: 1, dz: 0},   // East
-                {dx: 0, dz: -1},  // South
-                {dx: -1, dz: 0},  // West
+                {dx: 0, dz: 1},   // N
+                {dx: 1, dz: 1},   // NE
+                {dx: 1, dz: 0},   // E
+                {dx: 1, dz: -1},  // SE
+                {dx: 0, dz: -1},  // S
+                {dx: -1, dz: -1}, // SW
+                {dx: -1, dz: 0},  // W
+                {dx: -1, dz: 1},  // NW
             ];
             
-            // Find lowest neighbor
+            // Find lowest neighbor, with slight random variation
             for (const {dx, dz} of directions) {
                 const neighborX = gridX + dx;
                 const neighborZ = gridZ + dz;
@@ -670,7 +919,9 @@ export class TerrainRenderer {
                 const vertexIndex = meshY * (meshWidth + 1) + meshX;
                 
                 if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                    const elevation = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
+                    // Add small random variation to prevent all particles following same exact path
+                    const elevation = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 
+                                     (Math.random() * 0.5 - 0.25); // +/- 0.25 random jitter
                     
                     if (elevation < lowestElevation) {
                         lowestElevation = elevation;
@@ -680,18 +931,18 @@ export class TerrainRenderer {
                 }
             }
             
-            // Calculate movement direction
-            velocityX = (lowestNeighborX - gridX);
-            velocityZ = (lowestNeighborZ - gridZ);
+            // Calculate movement direction with some randomness for visual variation
+            velocityX = (lowestNeighborX - gridX) + (Math.random() * 0.4 - 0.2);
+            velocityZ = (lowestNeighborZ - gridZ) + (Math.random() * 0.4 - 0.2);
             
-            // Normalize direction
+            // Normalize direction vector
             const length = Math.sqrt(velocityX * velocityX + velocityZ * velocityZ);
             if (length > 0) {
                 velocityX /= length;
                 velocityZ /= length;
             }
             
-            // Move the particle
+            // Move the particle - adjust speed based on flow accumulation
             positions[i3] += velocityX * speed * speedMultiplier;
             positions[i3 + 2] += velocityZ * speed * speedMultiplier;
             
@@ -706,14 +957,23 @@ export class TerrainRenderer {
                 const vertexIndex = meshY * (meshWidth + 1) + meshX;
                 
                 if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                    const height = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
-                    positions[i3 + 1] = height + 5.0;
+                    const terrainHeight = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
+                    positions[i3 + 1] = terrainHeight + 4.0; // Keep close to terrain for visibility
                 }
+            }
+            
+            // Adjust color based on flow intensity
+            if (flow > 0) {
+                const flowIntensity = Math.min(1.0, Math.log(flow + 1) / Math.log(maxFlow + 1));
+                colors[i3] = 0.2 + flowIntensity * 0.2; // More red in higher flow
+                colors[i3 + 1] = 0.5 + flowIntensity * 0.3; // More green in higher flow
+                colors[i3 + 2] = 0.8 + flowIntensity * 0.2; // More blue in higher flow
             }
         }
         
-        // Update the geometry
+        // Update the geometry attributes
         this.particleSystem.geometry.attributes.position.needsUpdate = true;
+        this.particleSystem.geometry.attributes.color.needsUpdate = true; // Update colors
     }
     
     createStreamLines() {

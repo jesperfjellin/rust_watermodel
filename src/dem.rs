@@ -252,6 +252,11 @@ impl DigitalElevationModel {
                 return None;
             }
             
+            // Treat any negative value as a fill/no-data value
+            if value < 0.0 {
+                return None;
+            }
+            
             Some(value)
         } else {
             None
@@ -296,6 +301,11 @@ impl DigitalElevationModel {
         while let Some(StdReverse(item)) = queue.pop() {
             let cell_idx = item.y * width + item.x;
             let cell_elev = self.data[cell_idx];
+            
+            // Skip processing if this is a no-data or negative value
+            if cell_elev < 0.0 || cell_elev.is_nan() {
+                continue;
+            }
             
             // Get all valid neighbors of this cell
             let neighbors = self.get_neighbors(item.x, item.y);

@@ -78,18 +78,11 @@ function setupWaterControls() {
     // Add water flow toggle and density controls
     const waterControlsHTML = `
         <div class="water-controls">
-            <h3>Water Flow Controls</h3>
+            <h3>Flow Animation Controls</h3>
             <div>
                 <label>
-                    <input type="checkbox" id="showWater" checked />
-                    Show water particles
-                </label>
-            </div>
-            <div>
-                <label>
-                    Water particle count:
-                    <input type="range" id="particleDensity" min="1000" max="20000" step="1000" value="10000" />
-                    <span id="densityValue">10,000</span>
+                    <input type="checkbox" id="showFlowAnimation" checked />
+                    Show flow animation
                 </label>
             </div>
             <div>
@@ -105,24 +98,13 @@ function setupWaterControls() {
     controlsDiv.insertAdjacentHTML('beforeend', waterControlsHTML);
     
     // Setup event listeners for water controls
-    const showWaterCheckbox = document.getElementById('showWater');
-    const particleDensitySlider = document.getElementById('particleDensity');
+    const showFlowCheckbox = document.getElementById('showFlowAnimation');
     const flowSpeedSlider = document.getElementById('flowSpeed');
-    const densityValue = document.getElementById('densityValue');
     const speedValue = document.getElementById('speedValue');
     
-    showWaterCheckbox.addEventListener('change', () => {
+    showFlowCheckbox.addEventListener('change', () => {
         if (renderer) {
-            renderer.toggleWaterVisibility(showWaterCheckbox.checked);
-        }
-    });
-    
-    particleDensitySlider.addEventListener('input', () => {
-        const value = parseInt(particleDensitySlider.value);
-        densityValue.textContent = value.toLocaleString();
-        
-        if (renderer) {
-            renderer.setParticleDensity(value);
+            renderer.toggleFlowAnimation(showFlowCheckbox.checked);
         }
     });
     
