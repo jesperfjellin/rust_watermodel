@@ -127,16 +127,16 @@ export class TerrainRenderer {
             this.scene.remove(this.terrainMesh);
         }
         
-        // Use adaptive scaling based on DEM size for better performance
+        // Use more moderate scaling for better visual quality
         let scaleDown;
         if (Math.max(width, height) > 5000) {
-            scaleDown = 0.2; // 20% for very large (5000+)
+            scaleDown = 0.3; // Increased from 0.2 to 0.3 for very large DEMs
         } else if (Math.max(width, height) > 3000) {
-            scaleDown = 0.3; // 30% for large (3000-5000)
+            scaleDown = 0.4; // Increased from 0.3 to 0.4 for large DEMs 
         } else if (Math.max(width, height) > 1000) {
-            scaleDown = 0.5; // 50% for medium (1000-3000)
+            scaleDown = 0.6; // Increased from 0.5 to 0.6 for medium DEMs
         } else {
-            scaleDown = 1.0; // No reduction for small (<1000)
+            scaleDown = 1.0; // No reduction for small DEMs
         }
         
         console.log(`Using scale factor: ${scaleDown} for terrain of size ${width}x${height}`);
@@ -267,9 +267,8 @@ export class TerrainRenderer {
     
     // Create simplified high-quality terrain
     createSimpleTerrain(terrainData, width, height, resolution, scaleDown) {
-        // Calculate optimal vertex count for high quality without exceeding WebGL limits
-        // WebGL can handle about 16 million indices in most implementations
-        const maxVerticesPerDimension = 1000; // Limit to 1000x1000 grid max (1M vertices)
+        // Increase the maximum vertex count for higher quality
+        const maxVerticesPerDimension = 1600; // Increased from 1000 to 1600
         
         // Calculate how many vertices to use based on DEM size
         let meshWidth = width;
@@ -277,8 +276,15 @@ export class TerrainRenderer {
         let skipFactor = 1;
         
         // If DEM is too large, calculate a skip factor to reduce resolution
+        // but use a more aggressive approach to keep more detail
         if (width > maxVerticesPerDimension || height > maxVerticesPerDimension) {
-            skipFactor = Math.ceil(Math.max(width, height) / maxVerticesPerDimension);
+            // Use lower skip factor for better quality
+            skipFactor = Math.max(1, Math.ceil(Math.max(width, height) / maxVerticesPerDimension));
+            // For very large DEMs, try to use at least 25% more vertices than before
+            if (skipFactor > 3) {
+                skipFactor = Math.floor(skipFactor * 0.75);
+            }
+            
             meshWidth = Math.floor(width / skipFactor);
             meshHeight = Math.floor(height / skipFactor);
             console.log(`DEM too large for WebGL, using ${meshWidth}x${meshHeight} vertices with skip factor ${skipFactor}`);
