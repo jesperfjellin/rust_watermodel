@@ -239,4 +239,17 @@ impl WaterModel {
             .unwrap_or(JsValue::NULL);
         dims
     }
+    
+    // Get geographic bounds of the DEM for WMS integration
+    #[wasm_bindgen]
+    pub fn get_geographic_bounds(&self) -> JsValue {
+        if let Some(dem) = &self.dem {
+            // Return bounds as [west, south, east, north] for WMS compatibility
+            let (minx, miny, maxx, maxy) = dem.bounds;
+            let bounds = [minx, miny, maxx, maxy];
+            serde_wasm_bindgen::to_value(&bounds).unwrap_or(JsValue::NULL)
+        } else {
+            JsValue::NULL
+        }
+    }
 }

@@ -30,6 +30,11 @@ export class TerrainRenderer {
         this.terrainMesh = null;
         this.particleSystem = null; // We keep this reference but won't create it
         this.streamLines = null;
+        this.wmsTexture = null;
+        this.wmsEnabled = false;
+        
+        // Geographic extents for WMS
+        this.geoBounds = null;
         
         // Stats
         this.dimensions = null;
@@ -114,10 +119,13 @@ export class TerrainRenderer {
         this.renderer.render(this.scene, this.camera);
     }
     
-    setTerrainData(terrainData, dimensions) {
+    setTerrainData(terrainData, dimensions, geoBounds = null) {
         // Store dimensions
         this.dimensions = dimensions;
         const [width, height, resolution] = dimensions;
+        
+        // Store geographic bounds if provided (for WMS)
+        this.geoBounds = geoBounds;
         
         // Clear previous terrain
         if (this.terrainMesh) {
@@ -1020,5 +1028,117 @@ export class TerrainRenderer {
         
         // Add to scene
         this.scene.add(this.streamLines);
+    }
+    
+    // Set WMS image as a texture for the terrain
+    setWmsTexture(wmsUrl, layers, width, height) {
+        if (!this.terrainMesh || !this.geoBounds) {
+            console.warn("Cannot set WMS texture: Terrain mesh not ready or geographic bounds not available");
+            return false;
+        }
+        
+        try {
+            // Get geographic bounds
+            const [west, south, east, north] = this.geoBounds;
+            
+            // Construct WMS URL
+            // Example WMS URL: https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/WMSServer
+            const fullWmsUrl = `${wmsUrl}?service=WMS&version=1.3.0&request=GetMap&layers=${layers}&styles=&crs=EPSG:4326&bbox=${south},${west},${north},${east}&width=${width}&height=${height}&format=image/png&transparent=true`;
+            
+            console.log(`Loading WMS from: ${fullWmsUrl}`);
+            
+            // Create a new texture loader
+            const textureLoader = new THREE.TextureLoader();
+            
+            // Load the texture
+            textureLoader.setCrossOrigin('anonymous');
+            textureLoader.load(
+                fullWmsUrl,
+                (texture) => {
+                    // Store the texture
+                    this.wmsTexture = texture;
+                    this.wmsTexture.wrapS = THREE.ClampToEdgeWrapping;
+                    this.wmsTexture.wrapT = THREE.ClampToEdgeWrapping;
+                    
+                    // Apply to terrain if enabled
+                    if (this.wmsEnabled) {
+                        this.applyWmsTexture();
+                    }
+                    
+                    console.log("WMS texture loaded successfully");
+                },
+                (xhr) => {
+                    console.log(`WMS loading: ${(xhr.loaded / xhr.total * 100)}% loaded`);
+                },
+                (error) => {
+                    console.error("Error loading WMS texture:", error);
+                }
+            );
+            
+            return true;
+        } catch (error) {
+            console.error("Error setting WMS texture:", error);
+            return false;
+        }
+    }
+    
+    // Toggle WMS imagery on/off
+    toggleWmsVisibility(visible) {
+        this.wmsEnabled = visible;
+        
+        if (visible && this.wmsTexture && this.terrainMesh) {
+            this.applyWmsTexture();
+        } else if (!visible && this.terrainMesh) {
+            this.removeWmsTexture();
+        }
+        
+        return this.wmsEnabled;
+    }
+    
+    // Apply WMS texture to terrain
+    applyWmsTexture() {
+        if (!this.terrainMesh || !this.wmsTexture) return;
+        
+        // Clone the current material to preserve properties
+        const newMaterial = this.terrainMesh.material.clone();
+        
+        // Apply the texture
+        newMaterial.map = this.wmsTexture;
+        newMaterial.vertexColors = true;  // Keep vertex colors for blending
+        newMaterial.needsUpdate = true;
+        
+        // Store the old material for when we want to toggle off
+        this.terrainMesh.userData.originalMaterial = this.terrainMesh.material;
+        
+        // Apply the new material
+        this.terrainMesh.material = newMaterial;
+    }
+    
+    // Remove WMS texture and restore original material
+    removeWmsTexture() {
+        if (!this.terrainMesh) return;
+        
+        if (this.terrainMesh.userData.originalMaterial) {
+            // Restore original material
+            this.terrainMesh.material.dispose();
+            this.terrainMesh.material = this.terrainMesh.userData.originalMaterial;
+        } else {
+            // Or create a new material without the texture
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true,
+                metalness: 0.0,
+                roughness: 0.7,
+                side: THREE.DoubleSide,
+            });
+            
+            this.terrainMesh.material.dispose();
+            this.terrainMesh.material = material;
+        }
+    }
+    
+    // Set geographic bounds for the terrain (needed for WMS)
+    setGeographicBounds(bounds) {
+        // bounds should be [west, south, east, north] in degrees
+        this.geoBounds = bounds;
     }
 }
