@@ -14,6 +14,10 @@ init().then(() => {
 let waterModel = null;
 let renderer = null;
 
+// Default values
+const DEFAULT_STREAM_THRESHOLD = 0.01; // 1%
+const FILL_SINKS = true;
+
 function setupUI() {
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -40,29 +44,16 @@ function setupUI() {
         }
     });
     
-    // Setup file input
+    // Setup file input - now hidden but activated by clicking on the drop zone
+    dropZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+    
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
             processFiles(e.target.files);
         }
     });
-    
-    // Setup stream threshold slider
-    const thresholdSlider = document.getElementById('streamThreshold');
-    const thresholdValue = document.getElementById('thresholdValue');
-    
-    thresholdSlider.addEventListener('input', () => {
-        const value = thresholdSlider.value;
-        thresholdValue.textContent = `${(value * 100).toFixed(1)}%`;
-        
-        // Update visualization if we have data
-        if (waterModel && renderer) {
-            updateStreamVisualization(parseFloat(value));
-        }
-    });
-    
-    // Setup water animation controls
-    setupWaterControls();
     
     // Create the WaterModel instance
     waterModel = new WaterModel();
@@ -71,62 +62,19 @@ function setupUI() {
     renderer = new TerrainRenderer(document.getElementById('canvas3d'));
 }
 
-function setupWaterControls() {
-    // Create water animation controls
-    const controlsDiv = document.querySelector('.controls');
-    
-    // Add water flow toggle and density controls
-    const waterControlsHTML = `
-        <div class="water-controls">
-            <h3>Flow Animation Controls</h3>
-            <div>
-                <label>
-                    <input type="checkbox" id="showFlowAnimation" checked />
-                    Show flow animation
-                </label>
-            </div>
-            <div>
-                <label>
-                    Flow speed:
-                    <input type="range" id="flowSpeed" min="0.1" max="3.0" step="0.1" value="1.0" />
-                    <span id="speedValue">1.0x</span>
-                </label>
-            </div>
-        </div>
-    `;
-    
-    controlsDiv.insertAdjacentHTML('beforeend', waterControlsHTML);
-    
-    // Setup event listeners for water controls
-    const showFlowCheckbox = document.getElementById('showFlowAnimation');
-    const flowSpeedSlider = document.getElementById('flowSpeed');
-    const speedValue = document.getElementById('speedValue');
-    
-    showFlowCheckbox.addEventListener('change', () => {
-        if (renderer) {
-            renderer.toggleFlowAnimation(showFlowCheckbox.checked);
-        }
-    });
-    
-    flowSpeedSlider.addEventListener('input', () => {
-        const value = parseFloat(flowSpeedSlider.value);
-        speedValue.textContent = `${value.toFixed(1)}x`;
-        
-        if (renderer) {
-            renderer.setFlowSpeed(value);
-        }
-    });
-}
-
 async function processFiles(files) {
     const status = document.getElementById('status');
     const loader = document.getElementById('loader');
+    const dropZone = document.getElementById('dropZone');
     
     // Show loading indicator
     loader.style.display = 'block';
     status.textContent = 'Processing GeoTIFF file...';
     
     try {
+        // Hide drop zone to maximize visualization space
+        dropZone.style.display = 'none';
+        
         // Process the first file only for now
         const file = files[0];
         
@@ -156,13 +104,13 @@ async function processFiles(files) {
         
         status.textContent = 'Processing DEM...';
         
-        // Process the DEM data in Rust
+        // Process the DEM data in Rust with sinks always filled
         waterModel.process_dem_data(
             width,
             height,
             resolution,
             elevationData,
-            document.getElementById('fillSinks').checked
+            FILL_SINKS // Always fill sinks
         );
         
         // Compute flow directions and accumulation
@@ -175,12 +123,45 @@ async function processFiles(files) {
         
         // Hide loader
         loader.style.display = 'none';
-        status.textContent = 'DEM loaded and processed successfully!';
+        
+        // Update status and then fade it out after a few seconds
+        status.textContent = 'DEM loaded successfully';
+        setTimeout(() => {
+            status.style.opacity = '0';
+            // Show a small button to reload/reset
+            showResetButton();
+        }, 3000);
+        
     } catch (error) {
         console.error('Error processing files:', error);
         loader.style.display = 'none';
         status.textContent = `Error: ${error.message || 'Failed to process the file'}`;
+        
+        // Show drop zone again in case of error
+        dropZone.style.display = 'block';
     }
+}
+
+function showResetButton() {
+    // Create a tiny reset button
+    const resetBtn = document.createElement('button');
+    resetBtn.innerText = "Reset";
+    resetBtn.style.position = "absolute";
+    resetBtn.style.bottom = "20px";
+    resetBtn.style.right = "20px";
+    resetBtn.style.zIndex = "100";
+    resetBtn.style.padding = "5px 10px";
+    resetBtn.style.background = "rgba(0,0,0,0.5)";
+    resetBtn.style.color = "white";
+    resetBtn.style.border = "none";
+    resetBtn.style.borderRadius = "5px";
+    resetBtn.style.cursor = "pointer";
+    
+    resetBtn.addEventListener('click', () => {
+        window.location.reload();
+    });
+    
+    document.body.appendChild(resetBtn);
 }
 
 function renderTerrain() {
@@ -217,9 +198,11 @@ function renderTerrain() {
         console.error("Could not get stream spawn points:", error);
     }
     
-    // Update the stream visualization
-    const thresholdValue = parseFloat(document.getElementById('streamThreshold').value);
-    updateStreamVisualization(thresholdValue);
+    // Update the stream visualization with fixed 1% threshold
+    updateStreamVisualization(DEFAULT_STREAM_THRESHOLD);
+    
+    // Always enable flow animation
+    renderer.toggleFlowAnimation(true);
 }
 
 function updateStreamVisualization(thresholdPercentile) {
