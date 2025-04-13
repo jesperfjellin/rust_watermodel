@@ -218,19 +218,28 @@ function setupUI() {
     pulseEffect.style.display = 'none';
     pulseEffect.style.pointerEvents = 'none';
     
-    const loadingText = document.createElement('div');
-    loadingText.id = 'loadingText';
-    loadingText.style.marginTop = '10px';
-    loadingText.style.color = 'white';
-    loadingText.style.fontFamily = 'Arial, sans-serif';
-    loadingText.style.fontSize = '14px';
-    loadingText.textContent = 'Processing...';
+    // Create a scrolling log container instead of a single text line
+    const loadingLogContainer = document.createElement('div');
+    loadingLogContainer.id = 'loadingLogContainer';
+    loadingLogContainer.style.marginTop = '20px';
+    loadingLogContainer.style.color = 'white';
+    loadingLogContainer.style.fontFamily = 'Arial, sans-serif';
+    loadingLogContainer.style.fontSize = '14px';
+    loadingLogContainer.style.textAlign = 'center'; // Center the text
+    loadingLogContainer.style.height = '80px';
+    loadingLogContainer.style.overflowY = 'hidden';
+    loadingLogContainer.style.display = 'flex';
+    loadingLogContainer.style.flexDirection = 'column-reverse'; // Most recent at top
+    loadingLogContainer.style.backgroundColor = '#444'; // Solid matching color to loading bar background
+    loadingLogContainer.style.borderRadius = '8px';
+    loadingLogContainer.style.padding = '10px 15px 10px 15px'; // Add padding to all sides
+    loadingLogContainer.style.boxShadow = '0 2px 6px rgba(0, 0, 0, 0.2)'; // Subtle shadow
     
     loadingBar.appendChild(gradientBase);
     loadingBar.appendChild(progressOverlay);
     loadingBar.appendChild(pulseEffect);
     loadingBarContainer.appendChild(loadingBar);
-    loadingBarContainer.appendChild(loadingText);
+    loadingBarContainer.appendChild(loadingLogContainer);
     document.body.appendChild(loadingBarContainer);
     
     console.log("Setting up UI with canvas:", canvas3d);
@@ -346,27 +355,26 @@ function setupUI() {
             const progress = message.progress || 0;
             
             // Get references to the progress elements
-            const loadingText = document.getElementById('loadingText');
             const progressOverlay = document.getElementById('progressOverlay');
             
-            // Update the UI
-            if (loadingText && progressOverlay) {
-                loadingText.textContent = stage + '...';
-                
-                // Calculate overall progress (GeoTIFF parsing is the first stage)
-                const stageIndex = 0; // GeoTIFF parsing is first stage
-                const stageProgress = (stageIndex / PROCESSING_STAGES.length) * 100;
-                const nextStageProgress = ((stageIndex + 1) / PROCESSING_STAGES.length) * 100;
-                const overallProgress = stageProgress + 
-                    (nextStageProgress - stageProgress) * (progress / 100);
-                
-                // Update the progress bar
+            // Calculate overall progress (GeoTIFF parsing is the first stage)
+            const stageIndex = 0; // GeoTIFF parsing is first stage
+            const stageProgress = (stageIndex / PROCESSING_STAGES.length) * 100;
+            const nextStageProgress = ((stageIndex + 1) / PROCESSING_STAGES.length) * 100;
+            const overallProgress = stageProgress + 
+                (nextStageProgress - stageProgress) * (progress / 100);
+            
+            // Update the progress bar
+            if (progressOverlay) {
                 progressOverlay.style.width = `${100 - overallProgress}%`;
-                
-                // Log detailed info
-                if (message.details) {
-                    console.log(`${stage}: `, message.details);
-                }
+            }
+            
+            // Add a log entry with the stage information
+            addLogEntry(`${stage}${message.details ? `: ${JSON.stringify(message.details)}` : ''}`, overallProgress);
+            
+            // Log detailed info
+            if (message.details) {
+                console.log(`${stage}: `, message.details);
             }
             
             // Toggle pulse animation for the reading raster data phase
@@ -405,7 +413,6 @@ async function processFiles(files) {
     const instructionsOverlay = document.getElementById('instructionsOverlay');
     const loadingBarContainer = document.getElementById('loadingBarContainer');
     const progressOverlay = document.getElementById('progressOverlay');
-    const loadingText = document.getElementById('loadingText');
     
     // Hide instructions overlay
     if (instructionsOverlay) {
@@ -421,7 +428,7 @@ async function processFiles(files) {
     
     // Show initial state of loading bar
     progressOverlay.style.width = '100%'; // Start with no progress
-    loadingText.textContent = 'Preparing GeoTIFF processing...';
+    addLogEntry('Preparing GeoTIFF processing...', 0);
     
     // Function to start/stop the pulse animation
     const togglePulseAnimation = (start) => {
@@ -490,15 +497,14 @@ function processDEMData(data) {
     const { width, height, resolution, elevationData } = data;
     const loadingBarContainer = document.getElementById('loadingBarContainer');
     const progressOverlay = document.getElementById('progressOverlay');
-    const loadingText = document.getElementById('loadingText');
     const status = document.getElementById('status');
     
     // Function to update the progress bar with a small delay
     // to ensure the UI gets updated between processing steps
     const updateProgressWithDelay = (stage, progress) => {
         return new Promise(resolve => {
-            // Update the text immediately
-            loadingText.textContent = stage + '...';
+            // Add log entry with stage info
+            addLogEntry(stage, progress);
             
             // Force a UI update with requestAnimationFrame
             requestAnimationFrame(() => {
@@ -669,5 +675,42 @@ function updateStreamVisualization(thresholdPercentile) {
         } catch (fallbackError) {
             console.error("Could not get stream network as fallback:", fallbackError);
         }
+    }
+}
+
+// Helper function to get color for log entries - now returns white
+function getColorForProgress(progress) {
+    // Return white text color
+    return 'white';
+}
+
+// Helper function to add a log entry
+function addLogEntry(message, progress) {
+    const logContainer = document.getElementById('loadingLogContainer');
+    if (!logContainer) return;
+    
+    const entry = document.createElement('div');
+    entry.style.color = getColorForProgress(progress);
+    entry.style.marginBottom = '4px';
+    entry.style.transition = 'opacity 0.3s ease';
+    entry.style.opacity = '0';
+    entry.style.width = '100%'; // Ensure the div takes full width for centering
+    entry.style.textAlign = 'center'; // Center the text within each entry
+    entry.style.paddingTop = '4px'; // Add padding to the top of each entry
+    entry.style.lineHeight = '1.6'; // Increase line height for better readability
+    entry.textContent = message;
+    
+    // Add to the top of the container
+    logContainer.insertBefore(entry, logContainer.firstChild);
+    
+    // Fade in
+    setTimeout(() => {
+        entry.style.opacity = '1';
+    }, 10);
+    
+    // Limit the number of entries to keep
+    const maxEntries = 5;
+    while (logContainer.children.length > maxEntries) {
+        logContainer.removeChild(logContainer.lastChild);
     }
 }
