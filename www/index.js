@@ -1,5 +1,6 @@
 import init, { WaterModel } from './pkg/rust_watermodel.js';
 import { TerrainRenderer } from './three_renderer.js';
+import { LandingScene } from './landing_scene.js';
 
 // Initialize the WASM module
 init().then(() => {
@@ -13,6 +14,7 @@ init().then(() => {
 
 let waterModel = null;
 let renderer = null;
+let landingScene = null; // Reference to landing scene
 
 // Default values
 const DEFAULT_STREAM_THRESHOLD = 0.01; // 1%
@@ -23,6 +25,9 @@ function setupUI() {
     const fileInput = document.getElementById('fileInput');
     const status = document.getElementById('status');
     const loader = document.getElementById('loader');
+    const canvas3d = document.getElementById('canvas3d');
+    
+    console.log("Setting up UI with canvas:", canvas3d);
     
     // Setup drag and drop
     dropZone.addEventListener('dragover', (e) => {
@@ -58,22 +63,92 @@ function setupUI() {
     // Create the WaterModel instance
     waterModel = new WaterModel();
     
-    // Initialize the 3D renderer
-    renderer = new TerrainRenderer(document.getElementById('canvas3d'));
+    // Make the canvas fill the screen
+    canvas3d.style.margin = '0';
+    canvas3d.style.width = '100%';
+    canvas3d.style.height = '100vh';
+    
+    // Set initial dimensions explicitly 
+    canvas3d.width = window.innerWidth;
+    canvas3d.height = window.innerHeight;
+    
+    // Handle window resize
+    window.addEventListener('resize', () => {
+        canvas3d.width = window.innerWidth;
+        canvas3d.height = window.innerHeight;
+        if (landingScene) {
+            landingScene.resize();
+        }
+        if (renderer) {
+            renderer.resize();
+        }
+    });
+    
+    // Wait for a frame to ensure canvas dimensions are set
+    requestAnimationFrame(() => {
+        // Initialize the landing scene 
+        try {
+            landingScene = new LandingScene(canvas3d);
+            console.log("LandingScene created successfully");
+        } catch (e) {
+            console.error("Error creating LandingScene:", e);
+            status.textContent = "Error initializing 3D view. Please try reloading the page.";
+            status.style.opacity = "1";
+        }
+    });
+    
+    // Add drag and drop event listeners to the canvas
+    canvas3d.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        // Add a visual cue that files can be dropped
+        status.textContent = 'Drop your GeoTIFF file here';
+        status.style.opacity = '1';
+    });
+    
+    canvas3d.addEventListener('dragleave', () => {
+        status.style.opacity = '0';
+    });
+    
+    canvas3d.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            processFiles(files);
+        }
+    });
+    
+    // Allow clicking anywhere to open the file browser
+    canvas3d.addEventListener('click', () => {
+        if (landingScene) { // Only trigger file browser in landing scene
+            fileInput.click();
+        }
+    });
+    
+    // Hide the original drop zone since we're using the 3D scene
+    dropZone.style.display = 'none';
 }
 
 async function processFiles(files) {
     const status = document.getElementById('status');
     const loader = document.getElementById('loader');
-    const dropZone = document.getElementById('dropZone');
+    const canvas3d = document.getElementById('canvas3d');
     
     // Show loading indicator
     loader.style.display = 'block';
     status.textContent = 'Processing GeoTIFF file...';
+    status.style.opacity = '1';
     
     try {
-        // Hide drop zone to maximize visualization space
-        dropZone.style.display = 'none';
+        // Dispose of the landing scene if it exists
+        if (landingScene) {
+            landingScene.dispose();
+            landingScene = null;
+        }
+        
+        // Initialize the 3D renderer if not already done
+        if (!renderer) {
+            renderer = new TerrainRenderer(canvas3d);
+        }
         
         // Process the first file only for now
         const file = files[0];
@@ -136,9 +211,7 @@ async function processFiles(files) {
         console.error('Error processing files:', error);
         loader.style.display = 'none';
         status.textContent = `Error: ${error.message || 'Failed to process the file'}`;
-        
-        // Show drop zone again in case of error
-        dropZone.style.display = 'block';
+        status.style.opacity = '1';
     }
 }
 
@@ -158,6 +231,17 @@ function showResetButton() {
     resetBtn.style.cursor = "pointer";
     
     resetBtn.addEventListener('click', () => {
+        // Clean up resources before reloading
+        if (landingScene) {
+            landingScene.dispose();
+            landingScene = null;
+        }
+        if (renderer) {
+            // Clean up terrain renderer if it exists
+            renderer = null;
+        }
+        
+        // Reload the page
         window.location.reload();
     });
     
