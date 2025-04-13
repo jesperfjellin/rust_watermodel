@@ -1,10 +1,65 @@
+// Add a version query parameter to force browser to fetch a fresh copy
+// This prevents caching of the WASM module
 import init, { WaterModel } from './pkg/rust_watermodel.js';
 import { TerrainRenderer } from './three_renderer.js';
 import { LandingScene } from './landing_scene.js';
 
+// Version parameter for cache busting
+const WASM_VERSION = '1.4.0';
+
+// Define a global callback function that will receive stream data from Rust
+window.streamDataCallback = function(streamData) {
+    console.log("Stream data callback received data with length:", streamData.length);
+    if (window.currentRenderer) {
+        window.currentRenderer.setStreamPolylines(streamData);
+    }
+};
+
 // Initialize the WASM module
-init().then(() => {
-    console.log("WASM module initialized");
+init(`./pkg/rust_watermodel_bg.wasm?v=${WASM_VERSION}`).then(() => {
+    console.log(`WASM module v${WASM_VERSION} initialized`);
+    
+    // Comprehensive debug of all methods and global functions
+    if (window.debug) {
+        // Test global functions
+        console.log("global_streams_test exists:", typeof global_streams_test === 'function');
+        if (typeof global_streams_test === 'function') {
+            console.log("global_streams_test result:", global_streams_test());
+        }
+        
+        console.log("debug_streams exists:", typeof debug_streams === 'function');
+        if (typeof debug_streams === 'function') {
+            console.log("debug_streams result:", debug_streams());
+        }
+        
+        // Test instance methods
+        const model = new WaterModel();
+        const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(model))
+                        .filter(name => typeof model[name] === 'function');
+        
+        console.log("Available methods on WaterModel:", methods);
+        
+        // Test instance test method
+        if (typeof model.test === 'function') {
+            console.log("Test method result:", model.test());
+        } else {
+            console.log("Test method not available");
+        }
+        
+        // Check get_hq_streams specifically
+        if (typeof model.get_hq_streams === 'function') {
+            console.log("get_hq_streams exists!");
+            try {
+                const result = model.get_hq_streams();
+                console.log("get_hq_streams result:", result);
+            } catch (e) {
+                console.error("get_hq_streams error:", e);
+            }
+        } else {
+            console.log("get_hq_streams NOT FOUND");
+        }
+    }
+    
     setupUI();
 }).catch(e => {
     console.error("Failed to initialize WASM module:", e);
@@ -12,10 +67,16 @@ init().then(() => {
         "Error: Failed to initialize WebAssembly module. This app requires WebAssembly support.";
 });
 
+// Debug flag to print available methods
+window.debug = true;
+
 let waterModel = null;
 let renderer = null;
 let landingScene = null; // Reference to landing scene
 let geotiffWorker = null; // Web Worker for GeoTIFF processing
+
+// Make renderer globally accessible for callbacks
+window.currentRenderer = null;
 
 // Create the GeoTIFF Web Worker
 function createGeotiffWorker() {
@@ -621,6 +682,9 @@ function showResetButton() {
 function renderTerrain() {
     if (!waterModel || !renderer) return;
     
+    // Make renderer globally accessible for callbacks
+    window.currentRenderer = renderer;
+    
     // Get the terrain data
     const terrainData = waterModel.get_terrain_data();
     const dimensions = waterModel.get_dimensions();
@@ -654,24 +718,86 @@ function renderTerrain() {
     
     // Update the stream visualization with fixed 1% threshold
     updateStreamVisualization(DEFAULT_STREAM_THRESHOLD);
+    
+    // Try our global test functions if they exist
+    if (typeof global_streams_test === 'function') {
+        console.log("Calling global_streams_test from renderTerrain:", global_streams_test());
+    }
 }
 
 function updateStreamVisualization(thresholdPercentile) {
     if (!waterModel || !renderer) return;
     
-    // Get detailed stream polylines
+    console.log("updateStreamVisualization with threshold:", thresholdPercentile);
+    
+    // ATTEMPT 1: Try direct access to get_hq_streams which should work
+    // without parameters in our latest implementation
+    if (typeof waterModel.get_hq_streams === 'function') {
+        try {
+            console.log("Attempting direct get_hq_streams call...");
+            const streamData = waterModel.get_hq_streams(thresholdPercentile);
+            if (streamData && streamData instanceof Array) {
+                console.log(`Direct get_hq_streams succeeded with ${streamData.length} polylines`);
+                renderer.setStreamPolylines(streamData);
+                return;
+            } else {
+                console.warn("Direct get_hq_streams returned non-array:", streamData);
+            }
+        } catch (error) {
+            console.warn("Error with direct get_hq_streams:", error);
+        }
+    } else {
+        console.warn("Direct get_hq_streams not available");
+    }
+    
+    // ATTEMPT 2: Try global functions
+    if (typeof global_streams_test === 'function') {
+        console.log("Trying global_streams_test as fallback...");
+        global_streams_test();
+    }
+    
+    // ATTEMPT 3: Try all possible method names
+    const possibleFunctionNames = [
+        'getHqStreams',
+        'getHighQualityStreams',
+        'hq_streams',
+        'high_quality_streams',
+        'test'
+    ];
+    
+    for (const funcName of possibleFunctionNames) {
+        if (typeof waterModel[funcName] === 'function') {
+            try {
+                console.log(`Attempting to use ${funcName}...`);
+                const result = waterModel[funcName]();
+                if (result && result instanceof Array) {
+                    console.log(`Function ${funcName} succeeded with ${result.length} polylines`);
+                    renderer.setStreamPolylines(result);
+                    return;
+                }
+            } catch (error) {
+                console.warn(`Error using ${funcName}:`, error);
+            }
+        }
+    }
+    
+    // Fall back to standard stream polylines if all attempts failed
+    console.warn("All high-quality streams approaches failed - using standard stream representation");
+    
     try {
         const streamPolylines = waterModel.get_stream_polylines(thresholdPercentile);
+        console.log(`Using standard stream polylines with ${streamPolylines.length} segments`);
         renderer.setStreamPolylines(streamPolylines);
     } catch (error) {
         console.error("Could not get stream polylines:", error);
         
-        // Fall back to simpler stream representation
+        // Final fallback
         try {
             const streamNetwork = waterModel.get_stream_network(thresholdPercentile, 0);
+            console.log("Using basic stream network as last resort");
             renderer.setStreamNetwork(streamNetwork);
         } catch (fallbackError) {
-            console.error("Could not get stream network as fallback:", fallbackError);
+            console.error("Could not get any stream visualization:", fallbackError);
         }
     }
 }

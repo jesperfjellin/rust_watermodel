@@ -528,4 +528,142 @@ impl FlowModel {
             new_flow_accumulation = vec![1.0; cell_count];
         }
     }
+    
+    /// Extract a high-quality stream network with minimal downsampling
+    /// Returns stream polylines with variable density based on flow accumulation
+    pub fn extract_high_quality_streams(&self, threshold_percentile: f32) -> Vec<Vec<(usize, usize)>> {
+        let width = self.dem.width;
+        let height = self.dem.height;
+        
+        // Calculate max flow for threshold
+        let max_flow = self.flow_accumulation.iter()
+            .fold(0.0_f32, |max_val, &val| max_val.max(val));
+        
+        // Calculate threshold based on percentile
+        let threshold = max_flow * threshold_percentile;
+        
+        println!("Starting high-quality stream extraction with threshold {}", threshold);
+        
+        // Find all cells above threshold
+        let mut stream_cells = Vec::with_capacity(width * height / 100); // Estimate ~1% of cells
+        for y in 0..height {
+            for x in 0..width {
+                let idx = y * width + x;
+                if self.flow_accumulation[idx] >= threshold {
+                    stream_cells.push((x, y));
+                }
+            }
+        }
+        
+        println!("Found {} cells above threshold {}", stream_cells.len(), threshold);
+        
+        // Track visited cells to avoid duplicates
+        let mut visited = vec![false; width * height];
+        
+        // Generate stream polylines with adaptive sampling
+        let mut polylines = Vec::new();
+        
+        // Sort stream cells by flow accumulation (highest first)
+        // This ensures we start tracing from the most significant streams
+        stream_cells.sort_by(|&(x1, y1), &(x2, y2)| {
+            let flow1 = self.flow_accumulation[y1 * width + x1];
+            let flow2 = self.flow_accumulation[y2 * width + x2];
+            flow2.partial_cmp(&flow1).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        
+        // Process cells in batches 
+        let cells_per_batch = 100;
+        let mut total_polylines = 0;
+        let mut batch_start = 0;
+        
+        // Continue processing batches until we run out of cells
+        while batch_start < stream_cells.len() {
+            let batch_end = (batch_start + cells_per_batch).min(stream_cells.len());
+            let current_batch = &stream_cells[batch_start..batch_end];
+            
+            // Process this batch
+            for &(x, y) in current_batch {
+                let idx = y * width + x;
+                if visited[idx] {
+                    continue;
+                }
+                
+                // Start a new polyline from this cell
+                let mut polyline = Vec::new();
+                let mut current = (x, y);
+                
+                // Track flow accumulation for adaptive sampling
+                let mut last_flow = self.flow_accumulation[idx];
+                let mut last_point_added = true;
+                let mut distance_since_last_point = 0;
+                
+                // Trace downstream
+                loop {
+                    let (cx, cy) = current;
+                    let current_idx = cy * width + cx;
+                    
+
+                    // Mark as visited
+                    visited[current_idx] = true;
+                    
+                    // Get the current flow accumulation
+                    let current_flow = self.flow_accumulation[current_idx];
+                    
+                    // Decide whether to add this point based on:
+                    // 1. Flow accumulation change
+                    // 2. Distance since last point
+                    // 3. Always add first and junction points
+                    let flow_change_ratio = if last_flow > 0.0 { 
+                        (current_flow - last_flow).abs() / last_flow 
+                    } else { 
+                        1.0 
+                    };
+                    
+                    let significant_flow_change = flow_change_ratio > 0.05; // 5% change
+                    let enough_distance = distance_since_last_point >= 2;  // Reduced from 3 to 2 cells
+                    
+                    // Always add points to ensure continuous flow lines
+                    polyline.push(current);
+                    last_flow = current_flow;
+                    last_point_added = true;
+                    distance_since_last_point = 0;
+                    
+                    // Find the downstream cell to continue tracing
+                    if let Some(downstream) = self.get_downstream_cell(cx, cy) {
+                        // Continue to downstream cell
+                        current = downstream;
+                        
+                        // Check if we'll go below threshold
+                        let downstream_idx = downstream.1 * width + downstream.0;
+                        if self.flow_accumulation[downstream_idx] < threshold {
+                            // Ensure the very last point *before* dropping below threshold is added
+                            polyline.push(downstream); // Add the point that is just below threshold
+                            break;
+                        }
+                    } else {
+                        // Ensure the final point (the outlet/sink itself) is added
+                        // The current point `(cx, cy)` IS the last point here.
+                        // Ensure it was added on the previous iteration or add it now.
+                        if !last_point_added { // If the last loop iteration decided not to add it
+                            polyline.push(current);
+                        }
+                        break;
+                    }
+                }
+                
+
+                // Add the polyline if it has enough points
+                if polyline.len() >= 2 {
+                    polylines.push(polyline);
+                    total_polylines += 1;
+                }
+            }
+            
+            // Move to next batch
+            batch_start = batch_end;
+        }
+        
+        web_sys::console::log_1(&format!("Generated {} high-quality stream polylines", polylines.len()).into());
+        polylines
+    }
 }

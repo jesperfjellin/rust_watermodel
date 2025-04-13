@@ -332,3 +332,33 @@ pub fn smooth_stream_polylines(polylines: &mut Vec<Vec<(usize, usize)>>, iterati
         }
     }
 }
+
+/// Generate a higher quality stream network with less downsampling
+pub fn generate_high_quality_streams(flow_model: &FlowModel, threshold_percentile: f32) -> Vec<Vec<(usize, usize)>> {
+    // Add logging here
+    web_sys::console::log_1(&format!("Generating high-quality streams with percentile: {}", threshold_percentile).into());
+
+    // Calculate max flow accumulation for logging purposes
+    let max_flow = flow_model.flow_accumulation.iter()
+        .fold(0.0_f32, |max_val, &val| max_val.max(val));
+    web_sys::console::log_1(&format!("Max flow accumulation: {}", max_flow).into());
+    
+    // Calculate the actual threshold value
+    let actual_threshold = max_flow * threshold_percentile;
+     web_sys::console::log_1(&format!("Actual threshold value: {}", actual_threshold).into());
+
+
+    // Extract high-quality streams using the dedicated method
+    let polylines = flow_model.extract_high_quality_streams(threshold_percentile);
+    
+    // Log information about the result
+    web_sys::console::log_1(&format!("flow_model.extract_high_quality_streams returned {} polylines", polylines.len()).into());
+    
+    // Log information about the result
+    println!("Generated {} high-quality stream polylines with total {} points", 
+             polylines.len(),
+             polylines.iter().map(|p| p.len()).sum::<usize>());
+    
+    // Return the polylines as-is (no smoothing to preserve detail)
+    polylines
+}

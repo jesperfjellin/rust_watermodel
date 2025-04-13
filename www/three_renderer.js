@@ -119,17 +119,156 @@ export class TerrainRenderer {
         this.dimensions = dimensions;
         const [width, height, resolution] = dimensions;
         
+        // Store raw terrain data for height lookups
+        this.rawTerrainData = terrainData;
+        
         // Clear previous terrain
         if (this.terrainMesh) {
             this.scene.remove(this.terrainMesh);
         }
         
-        // Scale factor to make large terrains manageable
-        const scaleDown = Math.max(width, height) > 1000 ? 0.1 : 1.0;
+        // Use adaptive scaling based on DEM size for better performance
+        let scaleDown;
+        if (Math.max(width, height) > 5000) {
+            scaleDown = 0.2; // 20% for very large (5000+)
+        } else if (Math.max(width, height) > 3000) {
+            scaleDown = 0.3; // 30% for large (3000-5000)
+        } else if (Math.max(width, height) > 1000) {
+            scaleDown = 0.5; // 50% for medium (1000-3000)
+        } else {
+            scaleDown = 1.0; // No reduction for small (<1000)
+        }
+        
         console.log(`Using scale factor: ${scaleDown} for terrain of size ${width}x${height}`);
         
-        // For very large DEMs, we need to subsample to avoid WebGL limitations
-        // WebGL can only handle about 16 million indices in most implementations
+        // Store scale for use in other methods
+        this.terrainScale = scaleDown;
+        
+        // Always use simple terrain rendering with optimal quality settings
+        this.createSimpleTerrain(terrainData, width, height, resolution, scaleDown);
+    }
+    
+    createTerrainTile(terrainData, fullWidth, fullHeight, startX, startY, tileWidth, tileHeight, resolution, scaleDown, skipFactor, minHeight, maxHeight) {
+        // Calculate mesh dimensions based on skip factor
+        const meshWidth = Math.ceil(tileWidth / skipFactor);
+        const meshHeight = Math.ceil(tileHeight / skipFactor);
+        
+        // Add an extra vertex on each edge to create overlapping geometry
+        const geometryWidth = meshWidth + 2;
+        const geometryHeight = meshHeight + 2;
+        
+        // Create a plane geometry for this tile with extra vertices for overlap
+        const geometry = new THREE.PlaneGeometry(
+            tileWidth * resolution * scaleDown * 1.05, // Slightly larger plane
+            tileHeight * resolution * scaleDown * 1.05, // Slightly larger plane
+            geometryWidth,
+            geometryHeight
+        );
+        
+        // Create colors array for vertex coloring
+        const colors = new Float32Array(geometry.attributes.position.count * 3);
+        
+        // Set elevations and colors
+        for (let y = 0; y < meshHeight + 1; y++) {
+            for (let x = 0; x < meshWidth + 1; x++) {
+                // Map mesh coordinates to original DEM coordinates
+                const demX = Math.min(fullWidth - 1, startX + x * skipFactor);
+                const demY = Math.min(fullHeight - 1, startY + y * skipFactor);
+                const demIndex = demY * fullWidth + demX;
+                const vertexIndex = y * (meshWidth + 1) + x;
+                
+                if (vertexIndex >= geometry.attributes.position.count) continue;
+                
+                // Get elevation and filter out invalid values
+                let elevation = terrainData[demIndex];
+                
+                // If invalid elevation (negative or NaN), use slightly below minHeight
+                if (isNaN(elevation) || elevation < 0) {
+                    elevation = minHeight - 5;
+                }
+                
+                // Set Z value for this vertex
+                // Increase the height exaggeration factor for better visibility (higher for smaller skip factors)
+                const heightScale = (3.0 - skipFactor * 0.1) * scaleDown;
+                geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
+                
+                // Set vertex color based on elevation
+                const i3 = vertexIndex * 3;
+                
+                if (elevation <= 0.0) {
+                    // Neutral gray for elevation 0.0
+                    colors[i3] = 0.5;     // R
+                    colors[i3 + 1] = 0.5; // G
+                    colors[i3 + 2] = 0.5; // B
+                } else {
+                    // Create a gradient for elevation values
+                    // Normalize elevation within range
+                    const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - minHeight) / (maxHeight - minHeight)));
+                    
+                    // Use the same color scheme as in the original code
+                    // ... existing color gradient code ...
+                    if (normalizedHeight < 0.2) {
+                        // Forest green to olive green (0.1-0.2)
+                        const t = normalizedHeight / 0.2;
+                        colors[i3] = 0.13 + t * 0.17;    // R: 0.13 to 0.3
+                        colors[i3 + 1] = 0.33 + t * 0.22; // G: 0.33 to 0.55
+                        colors[i3 + 2] = 0.08 + t * 0.07; // B: 0.08 to 0.15
+                    } else if (normalizedHeight < 0.4) {
+                        // Olive green to yellow (0.2-0.4)
+                        const t = (normalizedHeight - 0.2) / 0.2;
+                        colors[i3] = 0.3 + t * 0.6;      // R: 0.3 to 0.9
+                        colors[i3 + 1] = 0.55 + t * 0.15; // G: 0.55 to 0.7
+                        colors[i3 + 2] = 0.15 - t * 0.15; // B: 0.15 to 0.0
+                    } else if (normalizedHeight < 0.6) {
+                        // Yellow to orange (0.4-0.6)
+                        const t = (normalizedHeight - 0.4) / 0.2;
+                        colors[i3] = 0.9;               // R: 0.9 to 0.9
+                        colors[i3 + 1] = 0.7 - t * 0.4; // G: 0.7 to 0.3
+                        colors[i3 + 2] = 0.0;           // B: 0 to 0
+                    } else if (normalizedHeight < 0.8) {
+                        // Orange to red (0.6-0.8)
+                        const t = (normalizedHeight - 0.6) / 0.2;
+                        colors[i3] = 0.9;               // R: 0.9 to 0.9
+                        colors[i3 + 1] = 0.3 - t * 0.2; // G: 0.3 to 0.1
+                        colors[i3 + 2] = 0.0 + t * 0.1; // B: 0 to 0.1
+                    } else {
+                        // Red to purple (0.8-1.0)
+                        const t = (normalizedHeight - 0.8) / 0.2;
+                        colors[i3] = 0.9 - t * 0.3;     // R: 0.9 to 0.6
+                        colors[i3 + 1] = 0.1 - t * 0.1; // G: 0.1 to 0
+                        colors[i3 + 2] = 0.1 + t * 0.5; // B: 0.1 to 0.6
+                    }
+                }
+            }
+        }
+        
+        // Add color attribute to geometry
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        
+        // Update the geometry
+        geometry.attributes.position.needsUpdate = true;
+        geometry.computeVertexNormals();
+        
+        // Create terrain material with vertex colors
+        const material = new THREE.MeshStandardMaterial({
+            vertexColors: true,
+            metalness: 0.0,
+            roughness: 0.7,
+            side: THREE.DoubleSide,
+        });
+        
+        // Create and return the tile mesh
+        const tileMesh = new THREE.Mesh(geometry, material);
+        tileMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+        tileMesh.receiveShadow = true;
+        
+        return tileMesh;
+    }
+    
+    // Create simplified high-quality terrain
+    createSimpleTerrain(terrainData, width, height, resolution, scaleDown) {
+        // Calculate optimal vertex count for high quality without exceeding WebGL limits
+        // WebGL can handle about 16 million indices in most implementations
         const maxVerticesPerDimension = 1000; // Limit to 1000x1000 grid max (1M vertices)
         
         // Calculate how many vertices to use based on DEM size
@@ -144,6 +283,13 @@ export class TerrainRenderer {
             meshHeight = Math.floor(height / skipFactor);
             console.log(`DEM too large for WebGL, using ${meshWidth}x${meshHeight} vertices with skip factor ${skipFactor}`);
         }
+        
+        // Store metadata for stream line height calculations
+        this.terrainMetadata = {
+            skipFactor: skipFactor,
+            meshWidth: meshWidth,
+            meshHeight: meshHeight
+        };
         
         // Create terrain geometry with appropriate detail level
         const geometry = new THREE.PlaneGeometry(
@@ -197,14 +343,20 @@ export class TerrainRenderer {
         // Create colors array for vertex coloring
         const colors = new Float32Array(geometry.attributes.position.count * 3);
         
+        // Use a higher height scale for better visualization
+        const heightScale = 2.0 * scaleDown;
+        this.heightScale = heightScale;
+        
         // Second pass: set elevations and colors, replacing invalid values with slightly below the min valid height
-        for (let y = 0; y < meshHeight; y++) {
-            for (let x = 0; x < meshWidth; x++) {
+        for (let y = 0; y < meshHeight + 1; y++) {
+            for (let x = 0; x < meshWidth + 1; x++) {
                 // Map mesh coordinates to original DEM coordinates
                 const demX = Math.min(width - 1, x * skipFactor);
                 const demY = Math.min(height - 1, y * skipFactor);
                 const demIndex = demY * width + demX;
                 const vertexIndex = y * (meshWidth + 1) + x;
+                
+                if (vertexIndex >= geometry.attributes.position.count) continue;
                 
                 // Get elevation and filter out invalid values
                 let elevation = terrainData[demIndex];
@@ -214,58 +366,53 @@ export class TerrainRenderer {
                     elevation = minHeight - 10; // Set clearly below valid terrain
                 }
                 
-                // Set Z value for this vertex (using stronger height exaggeration)
-                if (vertexIndex < geometry.attributes.position.count) {
-                    // Increase the height exaggeration factor significantly for better visibility
-                    const heightScale = 2.0 * scaleDown; 
-                    geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
+                // Set Z value for this vertex with height exaggeration
+                geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
+                
+                // Set vertex color based on elevation
+                const i3 = vertexIndex * 3;
+                
+                if (elevation <= 0.0) {
+                    // Neutral gray for elevation 0.0
+                    colors[i3] = 0.5;     // R
+                    colors[i3 + 1] = 0.5; // G
+                    colors[i3 + 2] = 0.5; // B
+                } else {
+                    // Create a gradient for elevation values > 0.1
+                    // Normalize elevation within range
+                    const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - minHeight) / (maxHeight - minHeight)));
                     
-                    // Set vertex color based on elevation
-                    const i3 = vertexIndex * 3;
-                    
-                    if (elevation <= 0.0) {
-                        // Neutral gray for elevation 0.0
-                        colors[i3] = 0.5;     // R
-                        colors[i3 + 1] = 0.5; // G
-                        colors[i3 + 2] = 0.5; // B
+                    // Improved color gradient code for better terrain visualization
+                    if (normalizedHeight < 0.2) {
+                        // Forest green to olive green (0.1-0.2)
+                        const t = normalizedHeight / 0.2;
+                        colors[i3] = 0.13 + t * 0.17;    // R: 0.13 to 0.3
+                        colors[i3 + 1] = 0.33 + t * 0.22; // G: 0.33 to 0.55
+                        colors[i3 + 2] = 0.08 + t * 0.07; // B: 0.08 to 0.15
+                    } else if (normalizedHeight < 0.4) {
+                        // Olive green to yellow (0.2-0.4)
+                        const t = (normalizedHeight - 0.2) / 0.2;
+                        colors[i3] = 0.3 + t * 0.6;      // R: 0.3 to 0.9
+                        colors[i3 + 1] = 0.55 + t * 0.15; // G: 0.55 to 0.7
+                        colors[i3 + 2] = 0.15 - t * 0.15; // B: 0.15 to 0.0
+                    } else if (normalizedHeight < 0.6) {
+                        // Yellow to orange (0.4-0.6)
+                        const t = (normalizedHeight - 0.4) / 0.2;
+                        colors[i3] = 0.9;               // R: 0.9 to 0.9
+                        colors[i3 + 1] = 0.7 - t * 0.4; // G: 0.7 to 0.3
+                        colors[i3 + 2] = 0.0;           // B: 0 to 0
+                    } else if (normalizedHeight < 0.8) {
+                        // Orange to red (0.6-0.8)
+                        const t = (normalizedHeight - 0.6) / 0.2;
+                        colors[i3] = 0.9;               // R: 0.9 to 0.9
+                        colors[i3 + 1] = 0.3 - t * 0.2; // G: 0.3 to 0.1
+                        colors[i3 + 2] = 0.0 + t * 0.1; // B: 0 to 0.1
                     } else {
-                        // Create a gradient for elevation values > 0.1
-                        // Normalize elevation within range
-                        const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - 0.1) / (maxHeight - 0.1)));
-                        
-                        // Create a warm-to-cool gradient with more muted greens (avoiding blue)
-                        // Colors transition: forest green -> olive green -> yellow -> orange -> red -> purple
-                        if (normalizedHeight < 0.2) {
-                            // Forest green to olive green (0.1-0.2)
-                            const t = normalizedHeight / 0.2;
-                            colors[i3] = 0.13 + t * 0.17;    // R: 0.13 to 0.3
-                            colors[i3 + 1] = 0.33 + t * 0.22; // G: 0.33 to 0.55
-                            colors[i3 + 2] = 0.08 + t * 0.07; // B: 0.08 to 0.15
-                        } else if (normalizedHeight < 0.4) {
-                            // Olive green to yellow (0.2-0.4)
-                            const t = (normalizedHeight - 0.2) / 0.2;
-                            colors[i3] = 0.3 + t * 0.6;      // R: 0.3 to 0.9
-                            colors[i3 + 1] = 0.55 + t * 0.15; // G: 0.55 to 0.7
-                            colors[i3 + 2] = 0.15 - t * 0.15; // B: 0.15 to 0.0
-                        } else if (normalizedHeight < 0.6) {
-                            // Yellow to orange (0.4-0.6)
-                            const t = (normalizedHeight - 0.4) / 0.2;
-                            colors[i3] = 0.9;               // R: 0.9 to 0.9
-                            colors[i3 + 1] = 0.7 - t * 0.4; // G: 0.7 to 0.3
-                            colors[i3 + 2] = 0.0;           // B: 0 to 0
-                        } else if (normalizedHeight < 0.8) {
-                            // Orange to red (0.6-0.8)
-                            const t = (normalizedHeight - 0.6) / 0.2;
-                            colors[i3] = 0.9;               // R: 0.9 to 0.9
-                            colors[i3 + 1] = 0.3 - t * 0.2; // G: 0.3 to 0.1
-                            colors[i3 + 2] = 0.0 + t * 0.1; // B: 0 to 0.1
-                        } else {
-                            // Red to purple (0.8-1.0)
-                            const t = (normalizedHeight - 0.8) / 0.2;
-                            colors[i3] = 0.9 - t * 0.3;     // R: 0.9 to 0.6
-                            colors[i3 + 1] = 0.1 - t * 0.1; // G: 0.1 to 0
-                            colors[i3 + 2] = 0.1 + t * 0.5; // B: 0.1 to 0.6
-                        }
+                        // Red to purple (0.8-1.0)
+                        const t = (normalizedHeight - 0.8) / 0.2;
+                        colors[i3] = 0.9 - t * 0.3;     // R: 0.9 to 0.6
+                        colors[i3 + 1] = 0.1 - t * 0.1; // G: 0.1 to 0
+                        colors[i3 + 2] = 0.1 + t * 0.5; // B: 0.1 to 0.6
                     }
                 }
             }
@@ -291,44 +438,43 @@ export class TerrainRenderer {
         this.terrainMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
         this.terrainMesh.receiveShadow = true;
         
-        // Store metadata for later use
-        this.terrainMetadata = {
-            skipFactor: skipFactor,
-            minHeight: minHeight,
-            maxHeight: maxHeight,
-            meshWidth: meshWidth,
-            meshHeight: meshHeight
-        };
-        
         // Add to scene
         this.scene.add(this.terrainMesh);
         
-        // Center camera on terrain
-        const centerX = 0;
-        const centerZ = 0;
-        this.controls.target.set(centerX, 0, centerZ);
+        // Create elevation legend
+        this.createElevationLegend(minHeight, maxHeight);
         
-        // Position camera at an angle to see terrain better
-        const cameraDistance = Math.max(width, height) * resolution * scaleDown * 0.8;
-        this.camera.position.set(
-            centerX, 
-            cameraDistance * 1.2, // Higher above terrain for better overview
-            centerZ + cameraDistance // Distance back from center
-        );
+        // Setup camera
+        this.setupCamera(width, height, resolution, scaleDown);
+    }
+    
+    // Add a setupCamera method to position camera appropriately
+    setupCamera(width, height, resolution, scaleDown, centerTile = null) {
+        // Calculate terrain dimensions
+        const terrainWidth = width * resolution * scaleDown;
+        const terrainHeight = height * resolution * scaleDown;
+        const terrainSize = Math.max(terrainWidth, terrainHeight);
         
-        // Update controls immediately and log camera position
-        this.controls.update();
+        // Set camera position to view the entire terrain
+        // Position camera based on terrain size
+        const cameraHeight = terrainSize * 0.8;
+        const cameraDistance = terrainSize * 0.7;
+        
+        this.camera.position.set(0, cameraHeight, cameraDistance);
+        this.camera.lookAt(0, 0, 0);
+        
+        // Update controls target if we have a center tile
+        if (centerTile) {
+            this.controls.target.copy(centerTile.position);
+        } else {
+            this.controls.target.set(0, 0, 0);
+        }
+        
+        // Log camera information
         console.log("Camera positioned at:", this.camera.position);
         console.log("Looking at target:", this.controls.target);
-        console.log("Terrain dimensions:", width * resolution * scaleDown, "x", height * resolution * scaleDown);
+        console.log("Terrain dimensions:", width, "x", height);
         console.log("Scale factor applied:", scaleDown);
-        
-        // Store scale factor for other elements
-        this.terrainScale = scaleDown;
-        this.heightScale = 2.0 * scaleDown; // Update the heightScale to match the exaggeration
-        
-        // Create or update the legend
-        this.createElevationLegend(minHeight, maxHeight);
     }
     
     // Create a vertical gradient legend showing elevation values
@@ -455,11 +601,12 @@ export class TerrainRenderer {
         console.log(`Got ${this.spawnPoints.length} stream spawn points`);
     }
     
-    // Set stream polylines for better visualization
+    // Set stream polylines with improved positioning
     setStreamPolylines(polylines) {
         if (!polylines || !this.dimensions) return;
+        console.log(`Processing ${polylines.length} stream polylines`);
         
-        // Clean up previous lines and pulses
+        // Clean up previous stream lines
         if (this.streamLines) {
             this.scene.remove(this.streamLines);
             this.streamLines = null;
@@ -485,6 +632,7 @@ export class TerrainRenderer {
         
         const [width, height, resolution] = this.dimensions;
         const scaleDown = this.terrainScale || 1.0;
+        const heightScale = this.heightScale || 2.0 * scaleDown;
         
         // Create a group for all stream lines
         this.streamLines = new THREE.Group();
@@ -497,68 +645,103 @@ export class TerrainRenderer {
             transparent: true
         });
         
-        // Store stream path data (but we won't use it for pulses)
-        this.streamPathData = [];
+        // Calculate bounds of the terrain mesh to filter out stream lines outside the terrain
+        const terrainBounds = {
+            minX: -(width * resolution * scaleDown) / 2,
+            maxX: (width * resolution * scaleDown) / 2,
+            minZ: -(height * resolution * scaleDown) / 2,
+            maxZ: (height * resolution * scaleDown) / 2
+        };
         
-        // Create a line for each stream polyline
+        // Process each polyline without a limit
         for (const polyline of polylines) {
             if (polyline.length < 2) continue; // Skip empty lines
             
             const points = [];
-            const worldPoints = []; // Store for reference only
+            let allPointsInBounds = true;
             
             // Convert from grid coordinates to world coordinates and add points
             for (let i = 0; i < polyline.length; i++) {
                 const [x, y] = polyline[i];
                 
-                // Get the corresponding point on the terrain
-                const worldX = (x / width) * width * resolution * scaleDown - (width * resolution * scaleDown / 2);
-                const worldZ = (y / height) * height * resolution * scaleDown - (height * resolution * scaleDown / 2);
-                
-                // Get the height at this position
-                const terrainX = Math.floor(x);
-                const terrainY = Math.floor(y);
-                let terrainHeight = 0;
-                
-                if (this.terrainMesh && this.terrainMetadata) {
-                    try {
-                        // Calculate vertex in decimated mesh
-                        const skipFactor = this.terrainMetadata.skipFactor || 1;
-                        const meshX = Math.floor(terrainX / skipFactor);
-                        const meshY = Math.floor(terrainY / skipFactor);
-                        const meshWidth = this.terrainMetadata.meshWidth;
-                        const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                        
-                        if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                            terrainHeight = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 0.5;
-                        }
-                    } catch (e) {
-                        // Just use default height
-                    }
+                // Skip points outside the DEM
+                if (x < 0 || x >= width || y < 0 || y >= height) {
+                    allPointsInBounds = false;
+                    continue;
                 }
                 
-                // Create the point
-                const point = new THREE.Vector3(worldX, terrainHeight, worldZ);
-                points.push(point);
-                worldPoints.push({x: worldX, y: terrainHeight, z: worldZ});
+                // Map to the correct coordinate system for the simple terrain
+                const worldX = (x - width/2) * resolution * scaleDown;
+                const worldZ = (y - height/2) * resolution * scaleDown;
+                
+                // Check if point is within terrain bounds (with small margin)
+                if (worldX < terrainBounds.minX || worldX > terrainBounds.maxX || 
+                    worldZ < terrainBounds.minZ || worldZ > terrainBounds.maxZ) {
+                    allPointsInBounds = false;
+                    continue;
+                }
+                
+                // Get height from raw terrain data
+                const idx = y * width + x;
+                let elevation = 0;
+                if (this.rawTerrainData && idx < this.rawTerrainData.length) {
+                    elevation = this.rawTerrainData[idx] || 0;
+                    // Apply same height exaggeration as terrain
+                    elevation = elevation * heightScale;
+                }
+                
+                // Add small offset to ensure visibility above terrain
+                elevation += 0.5;
+                
+                points.push(new THREE.Vector3(worldX, elevation, worldZ));
             }
             
-            // Create the line geometry for the stream
-            const geometry = new THREE.BufferGeometry().setFromPoints(points);
-            const line = new THREE.Line(geometry, lineMaterial);
-            
-            // Add to the group
-            this.streamLines.add(line);
-            
-            // Store path data for reference
-            this.streamPathData.push(worldPoints);
+            // Only create polyline if it has enough points and is within the terrain
+            if (points.length >= 2 && allPointsInBounds) {
+                const geometry = new THREE.BufferGeometry().setFromPoints(points);
+                const line = new THREE.Line(geometry, lineMaterial);
+                this.streamLines.add(line);
+            }
         }
         
         // Add all stream lines to the scene
         this.scene.add(this.streamLines);
-        console.log(`Created ${polylines.length} stream lines`);
+        console.log(`Created ${this.streamLines.children.length} stream lines`);
+    }
+    
+    // Helper method to get terrain height at a specific point
+    getTerrainHeightAtPoint(x, y) {
+        if (!this.terrainMesh) return 0;
         
-        // We no longer call setupStreamPulses()
+        // Get dimensions
+        const [width, height, resolution] = this.dimensions || [0, 0, 0];
+        
+        // For simple terrain, direct lookup
+        if (!(this.terrainMesh instanceof THREE.Group)) {
+            const demIdx = y * width + x;
+            return this.getTerrainHeightAtIndex(demIdx);
+        }
+        
+        // For tiled terrain, we need to check the tiles
+        const terrainGroup = this.terrainMesh;
+        const demIdx = y * width + x;
+        
+        // Fallback - use raw DEM data if available
+        if (this.rawTerrainData && demIdx < this.rawTerrainData.length) {
+            return this.rawTerrainData[demIdx] || 0;
+        }
+        
+        // If we can't determine height through tiles, use 0
+        return 0;
+    }
+    
+    // Helper method to get terrain height at a specific index
+    getTerrainHeightAtIndex(index) {
+        // Fallback to raw terrain data if available
+        if (this.rawTerrainData && index < this.rawTerrainData.length) {
+            return this.rawTerrainData[index] || 0;
+        }
+        return 0;
     }
     
     // This method is now empty - no pulse animations

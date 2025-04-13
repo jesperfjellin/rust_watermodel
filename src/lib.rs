@@ -14,6 +14,10 @@ static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 extern "C" {
     #[wasm_bindgen(js_namespace = console)]
     fn log(s: &str);
+    
+    // Define a global callback function
+    #[wasm_bindgen(js_namespace = window)]
+    fn streamDataCallback(data: JsValue);
 }
 
 // Initialize function called when the wasm module is loaded
@@ -21,7 +25,8 @@ extern "C" {
 pub fn start() {
     // Set up panic hook for better error messages
     panic::set_hook(Box::new(console_error_panic_hook::hook));
-    console::log_1(&"Water model WASM module initialized".into());
+    console::log_1(&"Water model WASM module initialized with high-quality streams support (v1.3)".into());
+    console::log_1(&"Module has static debug_streams function and method test() for diagnostics".into());
 }
 
 #[wasm_bindgen]
@@ -210,8 +215,12 @@ impl WaterModel {
     #[wasm_bindgen]
     pub fn get_stream_polylines(&self, threshold_percentile: f32) -> Result<JsValue, JsValue> {
         if let Some(flow_model) = &self.flow_model {
-            // Generate stream polylines
-            let polylines = visualization::generate_stream_network(flow_model, threshold_percentile, 0);
+            // Try to use the high-quality stream generator 
+            console::log_1(&format!("Generating HIGH QUALITY stream network with threshold {}", threshold_percentile).into());
+            
+            // Use our high-quality streams function
+            let polylines = visualization::generate_high_quality_streams(flow_model, threshold_percentile);
+            console::log_1(&format!("Generated {} high-quality stream polylines", polylines.len()).into());
             
             // Convert to a format suitable for JavaScript
             let result = serde_wasm_bindgen::to_value(&polylines)?;
@@ -239,4 +248,48 @@ impl WaterModel {
             .unwrap_or(JsValue::NULL);
         dims
     }
+    
+    // Get high-quality stream network without downsampling
+    #[wasm_bindgen]
+    pub fn get_hq_streams(&self, threshold_percentile: f32) -> JsValue {
+        console::log_1(&format!("get_hq_streams called with threshold percentile: {}", threshold_percentile).into());
+        
+        if let Some(flow_model) = &self.flow_model {
+            // Generate high-quality stream polylines using the provided threshold percentile
+            let polylines = visualization::generate_high_quality_streams(flow_model, threshold_percentile);
+            
+            // Log success
+            console::log_1(&format!("Generated {} high-quality stream polylines", polylines.len()).into());
+            
+            // Convert to JS directly without using Result
+            match serde_wasm_bindgen::to_value(&polylines) {
+                Ok(result) => result,
+                Err(_) => JsValue::NULL,
+            }
+        } else {
+            console::log_1(&"Flow model not computed".into());
+            JsValue::NULL
+        }
+    }
+
+    // Simple test function with minimal name to check if it gets exported
+    #[wasm_bindgen]
+    pub fn test(&self) -> JsValue {
+        console::log_1(&"Test function called!".into());
+        JsValue::from_str("test function response")
+    }
+}
+
+// Add a static debug function outside of the WaterModel impl
+#[wasm_bindgen]
+pub fn debug_streams() -> JsValue {
+    console::log_1(&"Debug streams function called".into());
+    JsValue::from_str("debug function working")
+}
+
+// A very simple global function that doesn't use WaterModel at all
+#[wasm_bindgen]
+pub fn global_streams_test() -> JsValue {
+    console::log_1(&"Global streams test function called".into());
+    JsValue::from_str("Global function works")
 }
