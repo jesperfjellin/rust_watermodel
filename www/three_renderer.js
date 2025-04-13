@@ -56,17 +56,35 @@ export class TerrainRenderer {
     }
     
     addLights() {
-        // Ambient light
-        const ambient = new THREE.AmbientLight(0xffffff, 0.5);
-        this.scene.add(ambient);
+        // Add ambient light (soft overall illumination)
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        this.scene.add(ambientLight);
         
-        // Directional light (sun)
-        const directional = new THREE.DirectionalLight(0xffffff, 0.8);
-        directional.position.set(1, 1, 1);
-        directional.castShadow = true;
-        directional.shadow.mapSize.width = 2048;
-        directional.shadow.mapSize.height = 2048;
-        this.scene.add(directional);
+        // Add directional light (sun-like)
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(100, 100, 50);
+        dirLight.castShadow = true;
+        
+        // Configure shadows for better quality
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.camera.near = 0.5;
+        dirLight.shadow.camera.far = 500;
+        dirLight.shadow.bias = -0.001;
+        
+        // Set up shadow camera frustum to cover terrain
+        const shadowExtent = 100;
+        dirLight.shadow.camera.left = -shadowExtent;
+        dirLight.shadow.camera.right = shadowExtent;
+        dirLight.shadow.camera.top = shadowExtent;
+        dirLight.shadow.camera.bottom = -shadowExtent;
+        
+        this.scene.add(dirLight);
+        
+        // Add a secondary directional light from another angle for more definition
+        const secondaryLight = new THREE.DirectionalLight(0xf0e0c0, 0.4); // Warm secondary light
+        secondaryLight.position.set(-50, 40, -50);
+        this.scene.add(secondaryLight);
     }
     
     resize() {
@@ -172,7 +190,10 @@ export class TerrainRenderer {
         console.log(`Terrain elevation range: ${minHeight} to ${maxHeight}`);
         console.log(`Average elevation: ${avgElevation}`);
         
-        // Second pass: set elevations, replacing invalid values with slightly below the min valid height
+        // Create colors array for vertex coloring
+        const colors = new Float32Array(geometry.attributes.position.count * 3);
+        
+        // Second pass: set elevations and colors, replacing invalid values with slightly below the min valid height
         for (let y = 0; y < meshHeight; y++) {
             for (let x = 0; x < meshWidth; x++) {
                 // Map mesh coordinates to original DEM coordinates
@@ -194,19 +215,70 @@ export class TerrainRenderer {
                     // Increase the height exaggeration factor significantly for better visibility
                     const heightScale = 2.0 * scaleDown; 
                     geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
+                    
+                    // Set vertex color based on elevation
+                    const i3 = vertexIndex * 3;
+                    
+                    if (elevation <= 0.0) {
+                        // Neutral gray for elevation 0.0
+                        colors[i3] = 0.5;     // R
+                        colors[i3 + 1] = 0.5; // G
+                        colors[i3 + 2] = 0.5; // B
+                    } else {
+                        // Create a gradient for elevation values > 0.1
+                        // Normalize elevation within range
+                        const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - 0.1) / (maxHeight - 0.1)));
+                        
+                        // Create a warm-to-cool gradient with more muted greens (avoiding blue)
+                        // Colors transition: forest green -> olive green -> yellow -> orange -> red -> purple
+                        if (normalizedHeight < 0.2) {
+                            // Forest green to olive green (0.1-0.2)
+                            const t = normalizedHeight / 0.2;
+                            colors[i3] = 0.13 + t * 0.17;    // R: 0.13 to 0.3
+                            colors[i3 + 1] = 0.33 + t * 0.22; // G: 0.33 to 0.55
+                            colors[i3 + 2] = 0.08 + t * 0.07; // B: 0.08 to 0.15
+                        } else if (normalizedHeight < 0.4) {
+                            // Olive green to yellow (0.2-0.4)
+                            const t = (normalizedHeight - 0.2) / 0.2;
+                            colors[i3] = 0.3 + t * 0.6;      // R: 0.3 to 0.9
+                            colors[i3 + 1] = 0.55 + t * 0.15; // G: 0.55 to 0.7
+                            colors[i3 + 2] = 0.15 - t * 0.15; // B: 0.15 to 0.0
+                        } else if (normalizedHeight < 0.6) {
+                            // Yellow to orange (0.4-0.6)
+                            const t = (normalizedHeight - 0.4) / 0.2;
+                            colors[i3] = 0.9;               // R: 0.9 to 0.9
+                            colors[i3 + 1] = 0.7 - t * 0.4; // G: 0.7 to 0.3
+                            colors[i3 + 2] = 0.0;           // B: 0 to 0
+                        } else if (normalizedHeight < 0.8) {
+                            // Orange to red (0.6-0.8)
+                            const t = (normalizedHeight - 0.6) / 0.2;
+                            colors[i3] = 0.9;               // R: 0.9 to 0.9
+                            colors[i3 + 1] = 0.3 - t * 0.2; // G: 0.3 to 0.1
+                            colors[i3 + 2] = 0.0 + t * 0.1; // B: 0 to 0.1
+                        } else {
+                            // Red to purple (0.8-1.0)
+                            const t = (normalizedHeight - 0.8) / 0.2;
+                            colors[i3] = 0.9 - t * 0.3;     // R: 0.9 to 0.6
+                            colors[i3 + 1] = 0.1 - t * 0.1; // G: 0.1 to 0
+                            colors[i3 + 2] = 0.1 + t * 0.5; // B: 0.1 to 0.6
+                        }
+                    }
                 }
             }
         }
+        
+        // Add color attribute to geometry
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         
         // Update the geometry
         geometry.attributes.position.needsUpdate = true;
         geometry.computeVertexNormals();
         
-        // Create terrain material
+        // Create terrain material with vertex colors
         const material = new THREE.MeshStandardMaterial({
-            color: 0x859970,
+            vertexColors: true,
             metalness: 0.0,
-            roughness: 0.8,
+            roughness: 0.7,
             side: THREE.DoubleSide,
         });
         
