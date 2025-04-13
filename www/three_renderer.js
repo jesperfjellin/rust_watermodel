@@ -86,10 +86,7 @@ export class TerrainRenderer {
         // Update controls
         this.controls.update();
         
-        // Update pulse animations for stream flow
-        if (this.streamLines && this.pulseObjects) {
-            this.updatePulses();
-        }
+        // We no longer update pulses
         
         // Render the scene
         this.renderer.render(this.scene, this.camera);
@@ -321,13 +318,23 @@ export class TerrainRenderer {
             this.pulseAnimations = [];
         }
         
+        // Clear any existing pulse objects
+        for (const pulse of this.pulseObjects || []) {
+            if (pulse.mesh) {
+                this.scene.remove(pulse.mesh);
+                pulse.mesh.geometry.dispose();
+                pulse.mesh.material.dispose();
+            }
+        }
+        this.pulseObjects = [];
+        
         const [width, height, resolution] = this.dimensions;
         const scaleDown = this.terrainScale || 1.0;
         
         // Create a group for all stream lines
         this.streamLines = new THREE.Group();
         
-        // Material for stream lines - slightly transparent blue
+        // Material for stream lines - blue for better visibility
         const lineMaterial = new THREE.LineBasicMaterial({
             color: 0x0088ff,
             linewidth: 3.0,
@@ -335,16 +342,7 @@ export class TerrainRenderer {
             transparent: true
         });
         
-        // Material for pulse segments - brighter blue
-        const pulseMaterial = new THREE.LineBasicMaterial({
-            color: 0x00aaff,
-            linewidth: 2,
-            opacity: 0.9,
-            transparent: true
-        });
-        
-        // Store pulse objects for animation
-        this.pulseObjects = [];
+        // Store stream path data (but we won't use it for pulses)
         this.streamPathData = [];
         
         // Create a line for each stream polyline
@@ -352,7 +350,7 @@ export class TerrainRenderer {
             if (polyline.length < 2) continue; // Skip empty lines
             
             const points = [];
-            const worldPoints = []; // Store actual positions for pulse animation
+            const worldPoints = []; // Store for reference only
             
             // Convert from grid coordinates to world coordinates and add points
             for (let i = 0; i < polyline.length; i++) {
@@ -397,7 +395,7 @@ export class TerrainRenderer {
             // Add to the group
             this.streamLines.add(line);
             
-            // Add this path to our stream data for pulse animations
+            // Store path data for reference
             this.streamPathData.push(worldPoints);
         }
         
@@ -405,274 +403,27 @@ export class TerrainRenderer {
         this.scene.add(this.streamLines);
         console.log(`Created ${polylines.length} stream lines`);
         
-        // Setup pulses on the longer stream paths
-        this.setupStreamPulses();
+        // We no longer call setupStreamPulses()
     }
     
-    // Create and animate pulse effects along stream paths
+    // This method is now empty - no pulse animations
     setupStreamPulses() {
-        // Clear any existing pulse objects
-        for (const pulse of this.pulseObjects || []) {
-            this.streamLines.remove(pulse.object);
-        }
-        this.pulseObjects = [];
-        
-        // Clear any previous animation timers
-        if (this.pulseAnimations) {
-            for (const timer of this.pulseAnimations) {
-                clearInterval(timer);
-            }
-            this.pulseAnimations = [];
-        }
-        
-        // Include ALL streams - no filtering by length except requiring at least 2 points
-        const allStreams = this.streamPathData.filter(path => path.length >= 2);
-        
-        if (allStreams.length === 0) return;
-        
-        console.log(`Creating pulses for ALL ${allStreams.length} streams`);
-        
-        // Create initial pulses for each stream at regular intervals
-        // Limit total initial pulses to avoid overwhelming performance
-        const maxInitialPulses = 1000; // Increased from 500
-        let initialPulseCount = 0;
-        
-        // First handle longer streams to ensure they're covered
-        const longStreams = allStreams.filter(path => path.length > 15)
-                          .sort((a, b) => b.length - a.length);
-        
-        // Place pulses on all long streams first
-        for (const path of longStreams) {
-            if (initialPulseCount >= maxInitialPulses) break;
-            
-            const pathLength = path.length;
-            const pulseLength = Math.max(3, Math.floor(pathLength * 0.05)); 
-            const gapBetweenPulses = Math.max(pulseLength, Math.floor(pathLength / 5)); // More pulses per stream
-            
-            // Place pulses at regular intervals
-            for (let startPos = 0; startPos < pathLength; startPos += gapBetweenPulses) {
-                if (startPos + pulseLength < pathLength) {
-                    this.createPulseOnPath(path, startPos, pulseLength);
-                    initialPulseCount++;
-                    
-                    if (initialPulseCount >= maxInitialPulses) break;
-                }
-            }
-        }
-        
-        // Now handle shorter streams - ensure we have more coverage
-        if (initialPulseCount < maxInitialPulses) {
-            const shortStreams = allStreams.filter(path => path.length <= 15);
-            
-            // Make sure we distribute plenty of pulses on shorter streams too
-            const maxShortStreamPulses = maxInitialPulses - initialPulseCount;
-            const pulsesPerShortStream = Math.max(1, Math.floor(maxShortStreamPulses / Math.max(1, shortStreams.length)));
-            
-            for (const path of shortStreams) {
-                if (initialPulseCount >= maxInitialPulses) break;
-                
-                // For short streams, try to place at least one pulse
-                if (path.length >= 2) {
-                    const pulseLength = Math.max(2, Math.min(path.length - 1, 3));
-                    
-                    // Place multiple pulses on each short stream if there's room
-                    for (let i = 0; i < pulsesPerShortStream; i++) {
-                        if (initialPulseCount >= maxInitialPulses) break;
-                        
-                        // Distribute pulses along the stream
-                        const startPos = Math.min(
-                            i * Math.floor(path.length / Math.max(1, pulsesPerShortStream)),
-                            Math.max(0, path.length - pulseLength - 1)
-                        );
-                        
-                        this.createPulseOnPath(path, startPos, pulseLength);
-                        initialPulseCount++;
-                    }
-                }
-            }
-        }
-        
-        const speedFactor = this.flowSpeed || 1.0;
-        
-        // Set up timer that continuously creates new pulses across ALL streams
-        const pulseRegenerationTimer = setInterval(() => {
-            // Only maintain a reasonable number of pulses for performance
-            const maxActivePulses = 800; // Increased from 400 for better coverage
-            
-            if (this.pulseObjects.length < maxActivePulses) {
-                // Determine how many new pulses to create this cycle
-                const pulsesToCreate = Math.min(15, maxActivePulses - this.pulseObjects.length);
-                
-                for (let i = 0; i < pulsesToCreate; i++) {
-                    // More aggressive random selection - 80% completely random streams
-                    const useRandomStream = Math.random() < 0.8; // Increased from 60%
-                    
-                    let streamIndex;
-                    if (useRandomStream) {
-                        // Completely random selection from all streams
-                        streamIndex = Math.floor(Math.random() * allStreams.length);
-                    } else {
-                        // Biased selection favoring longer streams for more visible effect
-                        // Select from first 30% of streams sorted by length
-                        const biasedIndex = Math.floor(Math.random() * Math.floor(allStreams.length * 0.3));
-                        streamIndex = biasedIndex;
-                    }
-                    
-                    const path = allStreams[streamIndex];
-                    
-                    if (path && path.length >= 2) {
-                        // Create pulse with size appropriate to stream length
-                        const pulseLength = Math.max(2, Math.min(path.length - 1, Math.floor(path.length * 0.05) + 2));
-                        
-                        // Randomize starting position to distribute pulses throughout streams
-                        const startPos = Math.floor(Math.random() * Math.max(1, path.length - pulseLength - 1));
-                        this.createPulseOnPath(path, startPos, pulseLength);
-                    }
-                }
-            }
-        }, 50 / speedFactor); // Create new pulses more frequently (from 80ms to 50ms)
-        
-        this.pulseAnimations.push(pulseRegenerationTimer);
+        // Disabled - no animations
+        console.log("Pulse animations disabled");
     }
     
-    // Create a pulse on a specific path
-    createPulseOnPath(pathIndex, startingSegment = 0) {
-        if (!this.streamPathData[pathIndex]) return null;
-        
-        const path = this.streamPathData[pathIndex];
-        if (path.length < 2) return null; // Need at least 2 points to create a segment
-        
-        // Use a slightly larger size for shorter paths to make them more visible
-        const basePulseSize = 0.6;
-        const minPathLength = 5;
-        const maxPathLength = 100;
-        const sizeMultiplier = 1 + (Math.max(0, maxPathLength - path.length) / maxPathLength);
-        
-        // Create the pulse with a size inversely proportional to path length (but with a minimum)
-        const pulseSize = Math.max(basePulseSize, basePulseSize * sizeMultiplier);
-        
-        const pulse = {
-            pathIndex,
-            segment: startingSegment || 0,
-            progress: 0,
-            speed: 0.1 + Math.random() * 0.1, // Random speed variation
-            size: pulseSize,
-            mesh: null,
-            active: true
-        };
-        
-        // Create a mesh for the pulse
-        const geometry = new THREE.SphereGeometry(pulse.size, 8, 8);
-        const material = new THREE.MeshBasicMaterial({ 
-            color: 0x66ccff,
-            opacity: 0.8,
-            transparent: true
-        });
-        
-        pulse.mesh = new THREE.Mesh(geometry, material);
-        this.scene.add(pulse.mesh);
-        
-        // Position at the starting segment
-        const startPoint = path[pulse.segment];
-        const endPoint = path[pulse.segment + 1];
-        
-        if (startPoint && endPoint) {
-            pulse.mesh.position.set(
-                startPoint.x + (endPoint.x - startPoint.x) * pulse.progress,
-                startPoint.y + (endPoint.y - startPoint.y) * pulse.progress + pulse.size/2,
-                startPoint.z + (endPoint.z - startPoint.z) * pulse.progress
-            );
-        }
-        
-        return pulse;
-    }
-    
-    // Update pulse animations
-    updatePulses() {
-        if (!this.pulseObjects || !this.streamLines) return;
-        
-        const speedFactor = this.flowSpeed || 1.0;
-        const pulsesToRemove = [];
-        
-        for (let i = 0; i < this.pulseObjects.length; i++) {
-            const pulse = this.pulseObjects[i];
-            
-            // Move pulse forward
-            pulse.currentIndex += pulse.speed * speedFactor;
-            
-            // If pulse has reached the end of the path, mark for removal
-            if (pulse.currentIndex + pulse.length >= pulse.path.length) {
-                pulsesToRemove.push(i);
-                this.streamLines.remove(pulse.object);
-                continue;
-            }
-            
-            // Update the pulse segment position
-            const pulsePoints = [];
-            const currentIdx = Math.floor(pulse.currentIndex);
-            
-            for (let j = 0; j < pulse.length && currentIdx + j < pulse.path.length; j++) {
-                const point = pulse.path[currentIdx + j];
-                pulsePoints.push(new THREE.Vector3(point.x, point.y + 1.5, point.z));
-            }
-            
-            // Skip if no points (should not happen, but as a safeguard)
-            if (pulsePoints.length === 0) {
-                pulsesToRemove.push(i);
-                this.streamLines.remove(pulse.object);
-                continue;
-            }
-            
-            // Update geometry
-            pulse.object.geometry.dispose(); // Clean up old geometry
-            pulse.object.geometry = new THREE.BufferGeometry().setFromPoints(pulsePoints);
-        }
-        
-        // Remove pulses that have completed their path
-        for (let i = pulsesToRemove.length - 1; i >= 0; i--) {
-            this.pulseObjects.splice(pulsesToRemove[i], 1);
-        }
-    }
-    
-    // For backward compatibility
-    setFlowData(flowData) {
-        this.flowData = flowData;
-        
-        // We no longer need to create particles
-        // if (!this.velocityData) {
-        //     // Create a simplified velocity field based on flow only
-        //     this.velocityData = flowData.map(flow => Math.log1p(flow) * 0.1);
-        // }
-        
-        // this.createParticleSystem();
-    }
-    
-    // For backward compatibility
-    setStreamNetwork(streamData) {
-        this.streamData = streamData;
-        
-        // Visualize streams as blue lines
-        this.createStreamLines();
-    }
-    
-    // Toggle flow animation visibility
+    // Toggle flow animation visibility - simplified to just show/hide stream lines
     toggleFlowAnimation(visible) {
         if (this.streamLines) {
             this.streamLines.visible = visible;
         }
         
-        // Stop/start pulse creation based on visibility
+        // Clean up any existing timers just to be safe
         if (this.pulseAnimations) {
-            // Clear existing timers
             for (const timer of this.pulseAnimations) {
                 clearInterval(timer);
             }
             this.pulseAnimations = [];
-            
-            // If visible, restart pulse animations
-            if (visible && this.streamPathData) {
-                this.setupStreamPulses();
-            }
         }
     }
     
