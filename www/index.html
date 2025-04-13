@@ -106,67 +106,6 @@
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
             display: block; /* Visible by default, hidden by JS when model loads */
         }
-        /* Controls panel styles */
-        #controlsPanel {
-            position: absolute;
-            top: 10px;
-            left: 10px;
-            padding: 10px;
-            background-color: rgba(0,0,0,0.7);
-            color: white;
-            border-radius: 5px;
-            z-index: 100;
-            display: none; /* Hidden initially, shown after model loads */
-            border: 1px solid #0088ff;
-        }
-        .control-row {
-            margin: 8px 0;
-            display: flex;
-            align-items: center;
-        }
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 40px;
-            height: 20px;
-            margin-right: 10px;
-        }
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #ccc;
-            transition: .4s;
-            border-radius: 10px;
-        }
-        .toggle-slider:before {
-            position: absolute;
-            content: "";
-            height: 16px;
-            width: 16px;
-            left: 2px;
-            bottom: 2px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-        input:checked + .toggle-slider {
-            background-color: #0088ff;
-        }
-        input:checked + .toggle-slider:before {
-            transform: translateX(20px);
-        }
-        .control-label {
-            font-size: 14px;
-        }
     </style>
 </head>
 <body>
@@ -176,17 +115,6 @@
     <!-- Instruction Text Overlay for Landing Scene -->
     <div id="instructionsOverlay">
         Click to upload or drag GeoTIFF file here
-    </div>
-    
-    <!-- Controls panel for after model loads -->
-    <div id="controlsPanel">
-        <div class="control-row">
-            <label class="toggle-switch">
-                <input type="checkbox" id="toggleWmsLayer">
-                <span class="toggle-slider"></span>
-            </label>
-            <span class="control-label">Satellite Imagery</span>
-        </div>
     </div>
     
     <!-- Fallback dropzone - hidden by default -->

@@ -146,10 +146,31 @@ function createGeotiffWorker() {
 // Default values
 const DEFAULT_STREAM_THRESHOLD = 0.01; // 1%
 const FILL_SINKS = true;
-const DEFAULT_WMS_URL = "https://services.arcgisonline.com/arcgis/rest/services/World_Imagery/MapServer/WMSServer";
-const DEFAULT_WMS_LAYERS = "0";
-const DEFAULT_WMS_WIDTH = 2048;
-const DEFAULT_WMS_HEIGHT = 2048;
+
+// Function to start/stop the pulse animation for the loading bar
+const togglePulseAnimation = (start) => {
+    const pulseEffect = document.getElementById('pulseEffect');
+    if (!pulseEffect) return;
+    
+    if (start) {
+        pulseEffect.style.display = 'block';
+        pulseEffect.style.animation = 'pulse 2s ease-in-out infinite';
+        // Define the animation if it doesn't exist
+        if (!document.getElementById('pulseAnimation')) {
+            const style = document.createElement('style');
+            style.id = 'pulseAnimation';
+            style.textContent = `
+            @keyframes pulse {
+                0% { background-position: 100% 0; }
+                100% { background-position: -100% 0; }
+            }`;
+            document.head.appendChild(style);
+        }
+    } else {
+        pulseEffect.style.display = 'none';
+        pulseEffect.style.animation = 'none';
+    }
+};
 
 // Define the processing stages for progress tracking
 const PROCESSING_STAGES = [
@@ -408,27 +429,6 @@ function setupUI() {
             togglePulseAnimation(false);
         }
     };
-
-    // Get controls elements
-    const controlsPanel = document.getElementById('controlsPanel');
-    const toggleWmsLayerCheckbox = document.getElementById('toggleWmsLayer');
-    
-    // Set up event handlers for controls
-    toggleWmsLayerCheckbox.addEventListener('change', function() {
-        if (!renderer) return;
-        
-        const isVisible = this.checked;
-        // If enabling WMS and we don't have it loaded yet, load it
-        if (isVisible && !renderer.wmsTexture) {
-            loadWmsTexture();
-        }
-        
-        // Toggle visibility
-        renderer.toggleWmsVisibility(isVisible);
-        
-        // Show status message
-        showStatus(isVisible ? "Satellite imagery enabled" : "Satellite imagery disabled");
-    });
 }
 
 async function processFiles(files) {
@@ -455,30 +455,7 @@ async function processFiles(files) {
     progressOverlay.style.width = '100%'; // Start with no progress
     addLogEntry('Preparing GeoTIFF processing...', 0);
     
-    // Function to start/stop the pulse animation
-    const togglePulseAnimation = (start) => {
-        const pulseEffect = document.getElementById('pulseEffect');
-        if (!pulseEffect) return;
-        
-        if (start) {
-            pulseEffect.style.display = 'block';
-            pulseEffect.style.animation = 'pulse 2s ease-in-out infinite';
-            // Define the animation if it doesn't exist
-            if (!document.getElementById('pulseAnimation')) {
-                const style = document.createElement('style');
-                style.id = 'pulseAnimation';
-                style.textContent = `
-                @keyframes pulse {
-                    0% { background-position: 100% 0; }
-                    100% { background-position: -100% 0; }
-                }`;
-                document.head.appendChild(style);
-            }
-        } else {
-            pulseEffect.style.display = 'none';
-            pulseEffect.style.animation = 'none';
-        }
-    };
+    // Function to start/stop the pulse animation -- MOVED OUTSIDE
     
     try {
         // Dispose of the landing scene if it exists
@@ -517,7 +494,6 @@ async function processFiles(files) {
     }
 }
 
-// New function to process DEM data once the worker returns
 function processDEMData(data) {
     const { width, height, resolution, elevationData } = data;
     const loadingBarContainer = document.getElementById('loadingBarContainer');
@@ -601,9 +577,6 @@ function processDEMData(data) {
             status.style.opacity = '1';
         }
     })();
-
-    // Show the controls panel
-    document.getElementById('controlsPanel').style.display = 'block';
 }
 
 function showResetButton() {
@@ -737,55 +710,6 @@ function addLogEntry(message, progress) {
     const maxEntries = 5;
     while (logContainer.children.length > maxEntries) {
         logContainer.removeChild(logContainer.lastChild);
-    }
-}
-
-// Add a function to load WMS texture
-function loadWmsTexture() {
-    if (!renderer || !waterModel) return;
-    
-    // Since get_geographic_bounds is not available, use estimated bounds based on dimensions
-    try {
-        const dimensions = waterModel.get_dimensions();
-        if (!dimensions || dimensions === null) {
-            console.warn("Dimensions not available for WMS");
-            showStatus("Unable to load satellite imagery: No dimensions available");
-            return;
-        }
-        
-        // Extract width, height, resolution from dimensions
-        const [width, height, resolution] = dimensions;
-        
-        // Create estimated bounds based on dimensions and resolution
-        // This assumes the DEM is centered around the origin (0,0)
-        // Using a fixed coordinate system for testing (replace with real coordinates if available)
-        const bounds = [
-            -74.5, // west (longitude)
-            40.5,  // south (latitude)
-            -73.5, // east (longitude)
-            41.5   // north (latitude)
-        ];
-        
-        // Set the bounds in the renderer
-        renderer.setGeographicBounds(bounds);
-        
-        // Load the WMS texture
-        const success = renderer.setWmsTexture(
-            DEFAULT_WMS_URL, 
-            DEFAULT_WMS_LAYERS,
-            DEFAULT_WMS_WIDTH,
-            DEFAULT_WMS_HEIGHT
-        );
-        
-        if (success) {
-            addLogEntry("Loading satellite imagery...", 0);
-            showStatus("Loading satellite imagery...");
-        } else {
-            showStatus("Failed to load satellite imagery");
-        }
-    } catch (error) {
-        console.error("Error loading WMS texture:", error);
-        showStatus("Error loading satellite imagery: " + error.message);
     }
 }
 
