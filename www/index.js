@@ -15,10 +15,145 @@ init().then(() => {
 let waterModel = null;
 let renderer = null;
 let landingScene = null; // Reference to landing scene
+let geotiffWorker = null; // Web Worker for GeoTIFF processing
+
+// Create the GeoTIFF Web Worker
+function createGeotiffWorker() {
+    // Create a blob containing the worker script
+    const workerScript = `
+        // GeoTIFF Worker
+        
+        // Listen for messages from the main thread
+        self.onmessage = async function(e) {
+            if (e.data.type === 'parseGeoTIFF') {
+                try {
+                    // Post updates about progress
+                    self.postMessage({ type: 'progress', stage: 'Starting GeoTIFF parsing', progress: 10 });
+                    
+                    // Load GeoTIFF.js from the main page's scope (dynamic import)
+                    self.importScripts('https://cdn.jsdelivr.net/npm/geotiff@2.0.7/dist-browser/geotiff.js');
+                    
+                    // Post progress update
+                    self.postMessage({ type: 'progress', stage: 'Parsing GeoTIFF', progress: 20 });
+                    
+                    // Parse the GeoTIFF
+                    const geotiff = await self.GeoTIFF.fromArrayBuffer(e.data.arrayBuffer);
+                    
+                    self.postMessage({ type: 'progress', stage: 'Reading image data', progress: 30 });
+                    
+                    // Get the first image
+                    const image = await geotiff.getImage();
+                    
+                    // Get metadata
+                    const width = image.getWidth();
+                    const height = image.getHeight();
+                    const fileDirectory = image.getFileDirectory();
+                    const bands = image.getSamplesPerPixel();
+                    
+                    self.postMessage({ 
+                        type: 'progress', 
+                        stage: 'Reading raster data', 
+                        progress: 40,
+                        details: { width, height, bands }
+                    });
+
+                    // On large files, provide incremental updates during the long process
+                    // Unfortunately, GeoTIFF.js doesn't expose progress callbacks for readRasters
+                    // So we'll use a timer to update progress periodically during the long operation
+                    const pixelCount = width * height;
+                    let readingInterval;
+
+                    if (pixelCount > 500000) { // For large files
+                        let progressPercent = 40;
+                        readingInterval = setInterval(() => {
+                            progressPercent += 1;
+                            if (progressPercent <= 85) {
+                                self.postMessage({ 
+                                    type: 'progress', 
+                                    stage: 'Reading raster data', 
+                                    progress: progressPercent,
+                                    details: { estimating: true }
+                                });
+                            }
+                        }, 100);
+                    }
+                    
+                    // Read rasters (the most time-consuming part)
+                    const startTime = Date.now();
+                    const rasters = await image.readRasters();
+                    const endTime = Date.now();
+                    
+                    // Clear the interval if it was set
+                    if (readingInterval) {
+                        clearInterval(readingInterval);
+                    }
+                    
+                    self.postMessage({ 
+                        type: 'progress', 
+                        stage: 'Raster data loaded', 
+                        progress: 90,
+                        details: { timeMs: endTime - startTime }
+                    });
+                    
+                    // Convert raster data to array
+                    const elevationData = Array.from(rasters[0]);
+                    
+                    // Get resolution
+                    let resolution = 10; // Default fallback
+                    if (fileDirectory.ModelPixelScale) {
+                        // Average X and Y resolution
+                        resolution = (fileDirectory.ModelPixelScale[0] + fileDirectory.ModelPixelScale[1]) / 2;
+                    }
+
+                    // Send progress update that we're preparing the final data
+                    self.postMessage({ 
+                        type: 'progress', 
+                        stage: 'Preparing elevation data', 
+                        progress: 95
+                    });
+                    
+                    // Send the complete data back to the main thread
+                    self.postMessage({
+                        type: 'complete',
+                        data: {
+                            width,
+                            height,
+                            resolution,
+                            elevationData
+                        }
+                    });
+                    
+                } catch (error) {
+                    self.postMessage({ type: 'error', message: error.message });
+                }
+            }
+        };
+        
+        // Log when worker starts
+        self.postMessage({ type: 'progress', stage: 'GeoTIFF Worker Initialized', progress: 0 });
+    `;
+    
+    // Create a blob URL for the worker script
+    const blob = new Blob([workerScript], { type: 'application/javascript' });
+    const workerUrl = URL.createObjectURL(blob);
+    
+    // Create the worker
+    const worker = new Worker(workerUrl);
+    
+    return worker;
+}
 
 // Default values
 const DEFAULT_STREAM_THRESHOLD = 0.01; // 1%
 const FILL_SINKS = true;
+
+// Define the processing stages for progress tracking
+const PROCESSING_STAGES = [
+    "Parsing GeoTIFF",
+    "Processing DEM",
+    "Computing flow model",
+    "Rendering terrain"
+];
 
 function setupUI() {
     const dropZone = document.getElementById('dropZone');
@@ -27,6 +162,76 @@ function setupUI() {
     const loader = document.getElementById('loader');
     const canvas3d = document.getElementById('canvas3d');
     const instructionsOverlay = document.getElementById('instructionsOverlay');
+    
+    // Create gradient loading bar elements
+    const loadingBarContainer = document.createElement('div');
+    loadingBarContainer.id = 'loadingBarContainer';
+    loadingBarContainer.style.display = 'none';
+    loadingBarContainer.style.position = 'absolute';
+    loadingBarContainer.style.top = '50%';
+    loadingBarContainer.style.left = '50%';
+    loadingBarContainer.style.transform = 'translate(-50%, -50%)';
+    loadingBarContainer.style.width = '60%';
+    loadingBarContainer.style.maxWidth = '500px';
+    loadingBarContainer.style.zIndex = '1000';
+    loadingBarContainer.style.textAlign = 'center';
+    
+    const loadingBar = document.createElement('div');
+    loadingBar.id = 'loadingBar';
+    loadingBar.style.height = '20px';
+    loadingBar.style.width = '100%';
+    loadingBar.style.position = 'relative';
+    loadingBar.style.borderRadius = '10px';
+    loadingBar.style.overflow = 'hidden';
+    loadingBar.style.boxShadow = '0 2px 5px rgba(0,0,0,0.2)';
+    
+    // Base gradient visible from the start (full width)
+    const gradientBase = document.createElement('div');
+    gradientBase.style.position = 'absolute';
+    gradientBase.style.top = '0';
+    gradientBase.style.left = '0';
+    gradientBase.style.width = '100%';
+    gradientBase.style.height = '100%';
+    gradientBase.style.background = 'linear-gradient(to right, rgb(13%, 33%, 8%), rgb(30%, 55%, 15%) 20%, rgb(90%, 70%, 0%) 40%, rgb(90%, 30%, 0%) 60%, rgb(90%, 10%, 10%) 80%, rgb(60%, 0%, 60%) 100%)';
+    
+    // Overlay that covers the gradient and will be reduced as progress increases
+    const progressOverlay = document.createElement('div');
+    progressOverlay.id = 'progressOverlay';
+    progressOverlay.style.position = 'absolute';
+    progressOverlay.style.top = '0';
+    progressOverlay.style.right = '0';
+    progressOverlay.style.height = '100%';
+    progressOverlay.style.width = '100%'; // Start with fully covered
+    progressOverlay.style.background = '#444';
+    progressOverlay.style.transition = 'width 0.5s ease-in-out';
+    
+    // Create a pulsing effect container for indeterminate progress
+    const pulseEffect = document.createElement('div');
+    pulseEffect.id = 'pulseEffect';
+    pulseEffect.style.position = 'absolute';
+    pulseEffect.style.top = '0';
+    pulseEffect.style.left = '0';
+    pulseEffect.style.height = '100%';
+    pulseEffect.style.width = '100%';
+    pulseEffect.style.background = 'linear-gradient(to right, transparent, rgba(255,255,255,0.3), transparent)';
+    pulseEffect.style.backgroundSize = '200% 100%';
+    pulseEffect.style.display = 'none';
+    pulseEffect.style.pointerEvents = 'none';
+    
+    const loadingText = document.createElement('div');
+    loadingText.id = 'loadingText';
+    loadingText.style.marginTop = '10px';
+    loadingText.style.color = 'white';
+    loadingText.style.fontFamily = 'Arial, sans-serif';
+    loadingText.style.fontSize = '14px';
+    loadingText.textContent = 'Processing...';
+    
+    loadingBar.appendChild(gradientBase);
+    loadingBar.appendChild(progressOverlay);
+    loadingBar.appendChild(pulseEffect);
+    loadingBarContainer.appendChild(loadingBar);
+    loadingBarContainer.appendChild(loadingText);
+    document.body.appendChild(loadingBarContainer);
     
     console.log("Setting up UI with canvas:", canvas3d);
     
@@ -127,6 +332,70 @@ function setupUI() {
     
     // Hide the original drop zone since we're using the 3D scene
     dropZone.style.display = 'none';
+
+    // Create Web Worker for GeoTIFF processing
+    geotiffWorker = createGeotiffWorker();
+    
+    // Listen for messages from the worker
+    geotiffWorker.onmessage = function(e) {
+        const message = e.data;
+        
+        if (message.type === 'progress') {
+            // Update progress based on worker updates
+            const stage = message.stage || 'Parsing GeoTIFF';
+            const progress = message.progress || 0;
+            
+            // Get references to the progress elements
+            const loadingText = document.getElementById('loadingText');
+            const progressOverlay = document.getElementById('progressOverlay');
+            
+            // Update the UI
+            if (loadingText && progressOverlay) {
+                loadingText.textContent = stage + '...';
+                
+                // Calculate overall progress (GeoTIFF parsing is the first stage)
+                const stageIndex = 0; // GeoTIFF parsing is first stage
+                const stageProgress = (stageIndex / PROCESSING_STAGES.length) * 100;
+                const nextStageProgress = ((stageIndex + 1) / PROCESSING_STAGES.length) * 100;
+                const overallProgress = stageProgress + 
+                    (nextStageProgress - stageProgress) * (progress / 100);
+                
+                // Update the progress bar
+                progressOverlay.style.width = `${100 - overallProgress}%`;
+                
+                // Log detailed info
+                if (message.details) {
+                    console.log(`${stage}: `, message.details);
+                }
+            }
+            
+            // Toggle pulse animation for the reading raster data phase
+            if (stage === 'Reading raster data') {
+                togglePulseAnimation(true);
+            } else if (stage === 'Raster data loaded') {
+                togglePulseAnimation(false);
+            }
+        }
+        else if (message.type === 'complete') {
+            // Worker has completed processing
+            console.log('GeoTIFF processing complete');
+            processDEMData(message.data);
+        }
+        else if (message.type === 'error') {
+            // Handle errors
+            console.error('GeoTIFF Worker error:', message.message);
+            const status = document.getElementById('status');
+            const loadingBarContainer = document.getElementById('loadingBarContainer');
+            
+            if (status && loadingBarContainer) {
+                loadingBarContainer.style.display = 'none';
+                status.textContent = `Error: ${message.message || 'Failed to process the file'}`;
+                status.style.opacity = '1';
+            }
+            
+            togglePulseAnimation(false);
+        }
+    };
 }
 
 async function processFiles(files) {
@@ -134,16 +403,50 @@ async function processFiles(files) {
     const loader = document.getElementById('loader');
     const canvas3d = document.getElementById('canvas3d');
     const instructionsOverlay = document.getElementById('instructionsOverlay');
+    const loadingBarContainer = document.getElementById('loadingBarContainer');
+    const progressOverlay = document.getElementById('progressOverlay');
+    const loadingText = document.getElementById('loadingText');
     
     // Hide instructions overlay
     if (instructionsOverlay) {
         instructionsOverlay.style.display = 'none';
     }
     
-    // Show loading indicator
-    loader.style.display = 'block';
+    // Hide old loader and show our new gradient loading bar
+    loader.style.display = 'none';
+    loadingBarContainer.style.display = 'block';
+    
     status.textContent = 'Processing GeoTIFF file...';
-    status.style.opacity = '1';
+    status.style.opacity = '0'; // Hide the status text as we'll use the loading bar
+    
+    // Show initial state of loading bar
+    progressOverlay.style.width = '100%'; // Start with no progress
+    loadingText.textContent = 'Preparing GeoTIFF processing...';
+    
+    // Function to start/stop the pulse animation
+    const togglePulseAnimation = (start) => {
+        const pulseEffect = document.getElementById('pulseEffect');
+        if (!pulseEffect) return;
+        
+        if (start) {
+            pulseEffect.style.display = 'block';
+            pulseEffect.style.animation = 'pulse 2s ease-in-out infinite';
+            // Define the animation if it doesn't exist
+            if (!document.getElementById('pulseAnimation')) {
+                const style = document.createElement('style');
+                style.id = 'pulseAnimation';
+                style.textContent = `
+                @keyframes pulse {
+                    0% { background-position: 100% 0; }
+                    100% { background-position: -100% 0; }
+                }`;
+                document.head.appendChild(style);
+            }
+        } else {
+            pulseEffect.style.display = 'none';
+            pulseEffect.style.animation = 'none';
+        }
+    };
     
     try {
         // Dispose of the landing scene if it exists
@@ -160,68 +463,113 @@ async function processFiles(files) {
         // Process the first file only for now
         const file = files[0];
         
-        // Parse the GeoTIFF file using GeoTIFF.js
-        status.textContent = 'Parsing GeoTIFF...';
+        // Read the file as an ArrayBuffer
         const arrayBuffer = await file.arrayBuffer();
-        // Use GeoTIFF as a global object instead of an imported module
-        const geotiff = await window.GeoTIFF.fromArrayBuffer(arrayBuffer);
-        const image = await geotiff.getImage();
-        const rasters = await image.readRasters();
         
-        // Get dimensions and metadata
-        const width = image.getWidth();
-        const height = image.getHeight();
-        
-        // Try to get resolution from the GeoTIFF
-        let resolution = 10; // Default fallback
-        const fileDirectory = image.getFileDirectory();
-        if (fileDirectory.ModelPixelScale) {
-            // Average X and Y resolution
-            resolution = (fileDirectory.ModelPixelScale[0] + fileDirectory.ModelPixelScale[1]) / 2;
+        // Send the ArrayBuffer to the Web Worker for processing
+        if (!geotiffWorker) {
+            geotiffWorker = createGeotiffWorker();
         }
         
-        // Convert raster data to the format expected by Rust
-        // Usually, first band contains elevation data
-        const elevationData = Array.from(rasters[0]);
-        
-        status.textContent = 'Processing DEM...';
-        
-        // Process the DEM data in Rust with sinks always filled
-        waterModel.process_dem_data(
-            width,
-            height,
-            resolution,
-            elevationData,
-            "fill", // Use standard fill method
-            0.1,    // epsilon value (not used with fill)
-            10      // max breach depth (not used with fill)
-        );
-        
-        // Compute flow directions and accumulation
-        status.textContent = 'Computing flow model...';
-        waterModel.compute_flow();
-        
-        // Render the terrain and flow
-        status.textContent = 'Rendering terrain...';
-        renderTerrain();
-        
-        // Hide loader
-        loader.style.display = 'none';
-        
-        // Update status and then fade it out after a few seconds
-        status.textContent = 'DEM loaded successfully';
-        setTimeout(() => {
-            status.style.opacity = '0';
-            // Show a small button to reload/reset
-            showResetButton();
-        }, 3000);
+        geotiffWorker.postMessage({
+            type: 'parseGeoTIFF',
+            arrayBuffer: arrayBuffer
+        });
         
     } catch (error) {
         console.error('Error processing files:', error);
-        loader.style.display = 'none';
+        loadingBarContainer.style.display = 'none';
         status.textContent = `Error: ${error.message || 'Failed to process the file'}`;
         status.style.opacity = '1';
+        togglePulseAnimation(false);
     }
+}
+
+// New function to process DEM data once the worker returns
+function processDEMData(data) {
+    const { width, height, resolution, elevationData } = data;
+    const loadingBarContainer = document.getElementById('loadingBarContainer');
+    const progressOverlay = document.getElementById('progressOverlay');
+    const loadingText = document.getElementById('loadingText');
+    const status = document.getElementById('status');
+    
+    // Function to update the progress bar with a small delay
+    // to ensure the UI gets updated between processing steps
+    const updateProgressWithDelay = (stage, progress) => {
+        return new Promise(resolve => {
+            // Update the text immediately
+            loadingText.textContent = stage + '...';
+            
+            // Force a UI update with requestAnimationFrame
+            requestAnimationFrame(() => {
+                // Update the progress bar
+                progressOverlay.style.width = `${100 - progress}%`;
+                
+                // Short delay to ensure the UI updates are visible
+                setTimeout(resolve, 50);
+            });
+        });
+    };
+    
+    // Process the DEM data with visible progress updates
+    (async function() {
+        try {
+            // Update progress to the next stage (Processing DEM)
+            const stageIndex = 1;
+            const stageProgress = (stageIndex / PROCESSING_STAGES.length) * 100;
+            await updateProgressWithDelay(PROCESSING_STAGES[stageIndex], stageProgress);
+            
+            // Process the DEM data in Rust with sinks always filled
+            waterModel.process_dem_data(
+                width,
+                height,
+                resolution,
+                elevationData,
+                "fill", // Use standard fill method
+                0.1,    // epsilon value (not used with fill)
+                10      // max breach depth (not used with fill)
+            );
+            
+            // Update progress to the next stage (Computing flow model)
+            const nextStageIndex = 2;
+            const nextStageProgress = (nextStageIndex / PROCESSING_STAGES.length) * 100;
+            await updateProgressWithDelay(PROCESSING_STAGES[nextStageIndex], nextStageProgress);
+            
+            // Compute flow directions and accumulation
+            waterModel.compute_flow();
+            
+            // Update progress to the next stage (Rendering terrain)
+            const finalStageIndex = 3;
+            const finalStageProgress = (finalStageIndex / PROCESSING_STAGES.length) * 100;
+            await updateProgressWithDelay(PROCESSING_STAGES[finalStageIndex], finalStageProgress);
+            
+            // Render the terrain and flow
+            renderTerrain();
+            
+            // Set progress to 100% and show full gradient
+            await updateProgressWithDelay('Complete', 100);
+            
+            // Wait a moment to show the completed progress bar before hiding
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Hide loader when complete
+            loadingBarContainer.style.display = 'none';
+            
+            // Update status and then fade it out after a few seconds
+            status.textContent = 'DEM loaded successfully';
+            status.style.opacity = '1';
+            setTimeout(() => {
+                status.style.opacity = '0';
+                // Show a small button to reload/reset
+                showResetButton();
+            }, 3000);
+        } catch (error) {
+            console.error('Error processing DEM data:', error);
+            loadingBarContainer.style.display = 'none';
+            status.textContent = `Error: ${error.message || 'Failed to process DEM data'}`;
+            status.style.opacity = '1';
+        }
+    })();
 }
 
 function showResetButton() {
