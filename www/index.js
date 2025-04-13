@@ -26,6 +26,7 @@ function setupUI() {
     const status = document.getElementById('status');
     const loader = document.getElementById('loader');
     const canvas3d = document.getElementById('canvas3d');
+    const instructionsOverlay = document.getElementById('instructionsOverlay');
     
     console.log("Setting up UI with canvas:", canvas3d);
     
@@ -53,6 +54,13 @@ function setupUI() {
     dropZone.addEventListener('click', () => {
         fileInput.click();
     });
+    
+    // Add click handler to instructions overlay
+    if (instructionsOverlay) {
+        instructionsOverlay.addEventListener('click', () => {
+            fileInput.click();
+        });
+    }
     
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
@@ -117,13 +125,6 @@ function setupUI() {
         }
     });
     
-    // Allow clicking anywhere to open the file browser
-    canvas3d.addEventListener('click', () => {
-        if (landingScene) { // Only trigger file browser in landing scene
-            fileInput.click();
-        }
-    });
-    
     // Hide the original drop zone since we're using the 3D scene
     dropZone.style.display = 'none';
 }
@@ -132,6 +133,12 @@ async function processFiles(files) {
     const status = document.getElementById('status');
     const loader = document.getElementById('loader');
     const canvas3d = document.getElementById('canvas3d');
+    const instructionsOverlay = document.getElementById('instructionsOverlay');
+    
+    // Hide instructions overlay
+    if (instructionsOverlay) {
+        instructionsOverlay.style.display = 'none';
+    }
     
     // Show loading indicator
     loader.style.display = 'block';
@@ -231,6 +238,12 @@ function showResetButton() {
     resetBtn.style.cursor = "pointer";
     
     resetBtn.addEventListener('click', () => {
+        // Show instructions overlay again
+        const instructionsOverlay = document.getElementById('instructionsOverlay');
+        if (instructionsOverlay) {
+            instructionsOverlay.style.display = 'block';
+        }
+        
         // Clean up resources before reloading
         if (landingScene) {
             landingScene.dispose();

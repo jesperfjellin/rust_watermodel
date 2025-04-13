@@ -88,11 +88,34 @@
             text-align: right;
             pointer-events: none;
         }
+        #instructionsOverlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 30px;
+            background-color: rgba(50, 50, 50, 0.7);
+            color: white;
+            border-radius: 8px;
+            font-size: 24px;
+            text-align: center;
+            z-index: 100;
+            pointer-events: auto; /* Allow clicks on this element */
+            cursor: pointer; /* Show hand cursor to indicate clickable */
+            border: 1px solid rgba(200, 200, 200, 0.5);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            display: block; /* Visible by default, hidden by JS when model loads */
+        }
     </style>
 </head>
 <body>
     <!-- The canvas is now our main UI element -->
     <canvas id="canvas3d"></canvas>
+    
+    <!-- Instruction Text Overlay for Landing Scene -->
+    <div id="instructionsOverlay">
+        Click to upload or drag GeoTIFF file here
+    </div>
     
     <!-- Fallback dropzone - hidden by default -->
     <div id="dropZone">
