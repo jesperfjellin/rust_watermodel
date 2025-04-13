@@ -39,6 +39,10 @@ export class TerrainRenderer {
         this.velocityData = null;
         this.spawnPoints = null;
         
+        // Legend element
+        this.legendElement = null;
+        this.flowLegendElement = null;
+        
         // Animation - we disable particle animation
         this.isAnimating = false;
         this.showWater = false;
@@ -322,6 +326,78 @@ export class TerrainRenderer {
         // Store scale factor for other elements
         this.terrainScale = scaleDown;
         this.heightScale = 2.0 * scaleDown; // Update the heightScale to match the exaggeration
+        
+        // Create or update the legend
+        this.createElevationLegend(minHeight, maxHeight);
+    }
+    
+    // Create a vertical gradient legend showing elevation values
+    createElevationLegend(minHeight, maxHeight) {
+        // Remove existing legend if any
+        if (this.legendElement) {
+            document.body.removeChild(this.legendElement);
+        }
+        
+        // Create legend container
+        const legend = document.createElement('div');
+        legend.className = 'elevation-legend';
+        legend.style.position = 'absolute';
+        legend.style.left = '20px';
+        legend.style.bottom = '20px';
+        legend.style.width = '60px';
+        legend.style.background = 'transparent';
+        legend.style.padding = '10px';
+        legend.style.zIndex = '1000';
+        legend.style.pointerEvents = 'none'; // So it doesn't interfere with orbit controls
+        
+        // Create gradient bar
+        const gradientBar = document.createElement('div');
+        gradientBar.style.width = '30px';
+        gradientBar.style.height = '200px';
+        gradientBar.style.margin = '0 auto';
+        gradientBar.style.position = 'relative';
+        
+        // Create the color gradient matching the terrain colors
+        let gradientColors = '';
+        gradientColors += 'linear-gradient(to top,';
+        gradientColors += ' rgb(33, 84, 20) 0%,';     // Forest green (lowest)
+        gradientColors += ' rgb(77, 140, 38) 20%,';   // Olive green
+        gradientColors += ' rgb(230, 179, 0) 40%,';   // Yellow
+        gradientColors += ' rgb(230, 76, 0) 60%,';    // Orange
+        gradientColors += ' rgb(230, 25, 25) 80%,';   // Red
+        gradientColors += ' rgb(60, 0, 153) 100%)';   // Purple (highest)
+        
+        gradientBar.style.background = gradientColors;
+        legend.appendChild(gradientBar);
+        
+        // Add value labels
+        const valueContainer = document.createElement('div');
+        valueContainer.style.display = 'flex';
+        valueContainer.style.flexDirection = 'column';
+        valueContainer.style.justifyContent = 'space-between';
+        valueContainer.style.height = '200px';
+        valueContainer.style.position = 'absolute';
+        valueContainer.style.top = '10px'; // No title offset now
+        valueContainer.style.left = '60px'; // Increased to move numbers more to the right
+        
+        // Add elevation values starting from bottom (min height) to top (max height)
+        const numLabels = 5;
+        for (let i = numLabels; i >= 0; i--) {
+            const value = minHeight + (maxHeight - minHeight) * (i / numLabels);
+            const valueLabel = document.createElement('div');
+            valueLabel.textContent = Math.round(value);
+            valueLabel.style.fontSize = '11px';
+            valueLabel.style.color = '#000';
+            valueContainer.appendChild(valueLabel);
+        }
+        
+        legend.appendChild(valueContainer);
+        
+        // Add legend to document body
+        document.body.appendChild(legend);
+        
+        // Store reference to legend element
+        this.legendElement = legend;
     }
     
     // Set comprehensive water visualization data
