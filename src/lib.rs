@@ -54,17 +54,25 @@ impl WaterModel {
                            height: usize, 
                            resolution: f64, 
                            elevation_data: Vec<f32>,
-                           fill_sinks: bool) -> Result<(), JsValue> {
+                           sink_method: &str,
+                           epsilon: f32,
+                           max_breach_depth: usize) -> Result<(), JsValue> {
         console::log_1(&format!("Processing DEM: {}x{} at {} resolution", width, height, resolution).into());
         
         // Create a DEM from the raw data
         let mut dem = dem::DigitalElevationModel::new(width, height, resolution, elevation_data);
         
-        // Fill sinks if requested
-        if fill_sinks {
-            console::log_1(&"Filling sinks in DEM...".into());
-            dem.fill_sinks();
-        }
+        // Process sinks based on method
+        let method = match sink_method {
+            "fill" => dem::SinkTreatmentMethod::CompletelyFill,
+            "epsilon" => dem::SinkTreatmentMethod::EpsilonFill(epsilon),
+            "breach" => dem::SinkTreatmentMethod::Breach(max_breach_depth),
+            "combined" => dem::SinkTreatmentMethod::Combined(epsilon, max_breach_depth),
+            _ => dem::SinkTreatmentMethod::CompletelyFill
+        };
+        
+        console::log_1(&"Processing sinks in DEM...".into());
+        dem.process_sinks(method);
         
         // Save the dimensions for easy access
         self.width = width;
@@ -185,18 +193,13 @@ impl WaterModel {
     
     // Get stream network data based on a threshold
     #[wasm_bindgen]
-    pub fn get_stream_network(&self, threshold_percentile: f32) -> Result<JsValue, JsValue> {
+    pub fn get_stream_network(&self, threshold_percentile: f32, smooth_iterations: usize) -> Result<JsValue, JsValue> {
         if let Some(flow_model) = &self.flow_model {
-            let streams = flow_model.get_major_streams(threshold_percentile);
+            // Generate stream network with smoothing
+            let stream_network = visualization::generate_stream_network(flow_model, threshold_percentile, smooth_iterations);
             
-            // Convert to a flat array of [x1, y1, x2, y2, ...]
-            let mut stream_points = Vec::with_capacity(streams.len() * 2);
-            for (x, y) in streams {
-                stream_points.push(x as u32);
-                stream_points.push(y as u32);
-            }
-            
-            let result = serde_wasm_bindgen::to_value(&stream_points)?;
+            // Convert to JS
+            let result = serde_wasm_bindgen::to_value(&stream_network)?;
             Ok(result)
         } else {
             Err(JsValue::from_str("Flow model not computed"))
@@ -208,7 +211,7 @@ impl WaterModel {
     pub fn get_stream_polylines(&self, threshold_percentile: f32) -> Result<JsValue, JsValue> {
         if let Some(flow_model) = &self.flow_model {
             // Generate stream polylines
-            let polylines = visualization::generate_stream_network(flow_model, threshold_percentile);
+            let polylines = visualization::generate_stream_network(flow_model, threshold_percentile, 0);
             
             // Convert to a format suitable for JavaScript
             let result = serde_wasm_bindgen::to_value(&polylines)?;

@@ -192,7 +192,9 @@ async function processFiles(files) {
             height,
             resolution,
             elevationData,
-            FILL_SINKS // Always fill sinks
+            "fill", // Use standard fill method
+            0.1,    // epsilon value (not used with fill)
+            10      // max breach depth (not used with fill)
         );
         
         // Compute flow directions and accumulation
@@ -314,7 +316,7 @@ function updateStreamVisualization(thresholdPercentile) {
         
         // Fall back to simpler stream representation
         try {
-            const streamNetwork = waterModel.get_stream_network(thresholdPercentile);
+            const streamNetwork = waterModel.get_stream_network(thresholdPercentile, 0);
             renderer.setStreamNetwork(streamNetwork);
         } catch (fallbackError) {
             console.error("Could not get stream network as fallback:", fallbackError);

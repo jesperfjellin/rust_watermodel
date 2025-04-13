@@ -318,4 +318,214 @@ impl FlowModel {
         let idx = y * self.dem.width + x;
         Some(self.flow_accumulation[idx])
     }
+    
+    /// Compute D∞ flow directions for each cell
+    pub fn compute_flow_directions_dinf(&mut self) {
+        let width = self.dem.width;
+        let height = self.dem.height;
+        let resolution = self.dem.resolution;
+        
+        // For D∞, we need to store flow angle and proportion
+        // Store angle in radians (0-2π) instead of discrete directions
+        let mut flow_angles = vec![0.0; width * height];
+        
+        for y in 1..height-1 {
+            for x in 1..width-1 {
+                if let Some(elev) = self.dem.get_elevation(x, y) {
+                    let idx = y * width + x;
+                    
+                    // Calculate the steepest downward slope direction by fitting a plane
+                    // to the 3x3 window centered on the current cell
+                    let mut facets = Vec::new();
+                    
+                    // For each of the 8 triangular facets around the center
+                    for i in 0..8 {
+                        let e0 = elev;
+                        
+                        // Get elevations for the two neighboring points forming the facet
+                        let i1 = i;
+                        let i2 = (i + 1) % 8;
+                        
+                        // Convert facet indices to neighbor coordinates
+                        let (dx1, dy1) = match i1 {
+                            0 => (1, 0),    // E
+                            1 => (1, 1),    // SE
+                            2 => (0, 1),    // S
+                            3 => (-1, 1),   // SW
+                            4 => (-1, 0),   // W
+                            5 => (-1, -1),  // NW
+                            6 => (0, -1),   // N
+                            7 => (1, -1),   // NE
+                            _ => unreachable!()
+                        };
+                        
+                        let (dx2, dy2) = match i2 {
+                            0 => (1, 0),    // E
+                            1 => (1, 1),    // SE
+                            2 => (0, 1),    // S
+                            3 => (-1, 1),   // SW
+                            4 => (-1, 0),   // W
+                            5 => (-1, -1),  // NW
+                            6 => (0, -1),   // N
+                            7 => (1, -1),   // NE
+                            _ => unreachable!()
+                        };
+                        
+                        // Get neighbor elevations (if available)
+                        if let (Some(e1), Some(e2)) = (
+                            self.dem.get_elevation((x as isize + dx1) as usize, (y as isize + dy1) as usize),
+                            self.dem.get_elevation((x as isize + dx2) as usize, (y as isize + dy2) as usize)
+                        ) {
+                            // Calculate slope vector components for this facet
+                            let sx = (e0 - e1) / (resolution * dx1.abs() as f64) as f32;
+                            let sy = (e0 - e2) / (resolution * dy2.abs() as f64) as f32;
+                            
+                            // Calculate magnitude and direction of slope
+                            let s = (sx*sx + sy*sy).sqrt();
+                            let d = f32::atan2(sy, sx);
+                            
+                            // Store facet information if it's downslope
+                            if s > 0.0 {
+                                facets.push((s, d));
+                            }
+                        }
+                    }
+                    
+                    // Find the steepest downslope facet
+                    if let Some(&(max_slope, flow_direction)) = facets.iter().max_by(|a, b| 
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)) {
+                        
+                        flow_angles[idx] = flow_direction;
+                        self.slopes[idx] = max_slope;
+                    }
+                }
+            }
+        }
+        
+        // Store flow angles and modify downstream processing to use angles
+        // instead of discrete directions
+        // This would require additional code changes throughout the codebase
+    }
+    
+    /// Compute flow accumulation based on flow directions using MFD method
+    pub fn compute_flow_accumulation_mfd(&mut self) {
+        let width = self.dem.width;
+        let height = self.dem.height;
+        let cell_count = width * height;
+        
+        // Create a matrix to store flow proportions from each cell to its neighbors
+        // For each cell, store up to 8 flow proportions (one for each neighbor)
+        let mut flow_proportions = vec![vec![0.0; 8]; cell_count];
+        
+        // Calculate flow proportions for each cell
+        for y in 0..height {
+            for x in 0..width {
+                if let Some(elev) = self.dem.get_elevation(x, y) {
+                    let idx = y * width + x;
+                    
+                    // Get all downslope neighbors and their slopes
+                    let mut downslope_neighbors = Vec::new();
+                    let directions = [
+                        (1, 0), (1, 1), (0, 1), (-1, 1),
+                        (-1, 0), (-1, -1), (0, -1), (1, -1)
+                    ];
+                    
+                    let distances = [
+                        self.dem.resolution as f32,
+                        (2.0 * self.dem.resolution * self.dem.resolution) as f32,
+                        self.dem.resolution as f32,
+                        (2.0 * self.dem.resolution * self.dem.resolution) as f32,
+                        self.dem.resolution as f32,
+                        (2.0 * self.dem.resolution * self.dem.resolution) as f32,
+                        self.dem.resolution as f32,
+                        (2.0 * self.dem.resolution * self.dem.resolution) as f32,
+                    ];
+                    
+                    for i in 0..8 {
+                        let (dx, dy) = directions[i];
+                        let nx = x as isize + dx;
+                        let ny = y as isize + dy;
+                        
+                        // Skip if neighbor is outside the DEM
+                        if nx < 0 || ny < 0 || nx >= width as isize || ny >= height as isize {
+                            continue;
+                        }
+                        
+                        // Get neighbor's elevation (if available)
+                        if let Some(n_elev) = self.dem.get_elevation(nx as usize, ny as usize) {
+                            // Calculate elevation difference (drop)
+                            let drop = elev - n_elev;
+                            
+                            // Only consider downslope neighbors
+                            if drop > 0.0 {
+                                // Calculate slope (drop / distance)
+                                let slope = drop / distances[i];
+                                downslope_neighbors.push((i, slope));
+                            }
+                        }
+                    }
+                    
+                    // Calculate flow proportion for each downslope neighbor
+                    // Using Quinn et al. (1991) method with exponent
+                    let exponent = 1.1; // Adjustable parameter
+                    let total_slope = downslope_neighbors.iter()
+                        .map(|(_, slope)| slope.powf(exponent))
+                        .sum::<f32>();
+                    
+                    if total_slope > 0.0 {
+                        for (dir_idx, slope) in downslope_neighbors {
+                            flow_proportions[idx][dir_idx] = slope.powf(exponent) / total_slope;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Initialize flow accumulation (each cell starts with 1.0)
+        self.flow_accumulation = vec![1.0; cell_count];
+        
+        // Create a copy for the iterative calculation
+        let mut new_flow_accumulation = self.flow_accumulation.clone();
+        
+        // Iterative flow routing until convergence
+        for _ in 0..20 { // Run for a fixed number of iterations
+            for y in 0..height {
+                for x in 0..width {
+                    let idx = y * width + x;
+                    
+                    // Distribute flow to downslope neighbors
+                    for dir_idx in 0..8 {
+                        let proportion = flow_proportions[idx][dir_idx];
+                        if proportion > 0.0 {
+                            let (dx, dy) = match dir_idx {
+                                0 => (1, 0),    // E
+                                1 => (1, 1),    // SE
+                                2 => (0, 1),    // S
+                                3 => (-1, 1),   // SW
+                                4 => (-1, 0),   // W
+                                5 => (-1, -1),  // NW
+                                6 => (0, -1),   // N
+                                7 => (1, -1),   // NE
+                                _ => unreachable!()
+                            };
+                            
+                            let nx = x as isize + dx;
+                            let ny = y as isize + dy;
+                            
+                            if nx >= 0 && ny >= 0 && nx < width as isize && ny < height as isize {
+                                let n_idx = ny as usize * width + nx as usize;
+                                new_flow_accumulation[n_idx] += self.flow_accumulation[idx] * proportion;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Update the flow accumulation
+            self.flow_accumulation = new_flow_accumulation.clone();
+            
+            // Reset for next iteration (keep the initial 1.0 for each cell)
+            new_flow_accumulation = vec![1.0; cell_count];
+        }
+    }
 }

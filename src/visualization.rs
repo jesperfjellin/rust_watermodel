@@ -203,7 +203,7 @@ fn is_stream_feature(flow_model: &FlowModel, x: usize, y: usize) -> bool {
 }
 
 /// Generate a list of stream polylines for visualization
-pub fn generate_stream_network(flow_model: &FlowModel, threshold_percentile: f32) -> Vec<Vec<(usize, usize)>> {
+pub fn generate_stream_network(flow_model: &FlowModel, threshold_percentile: f32, smooth_iterations: usize) -> Vec<Vec<(usize, usize)>> {
     println!("Generating stream network with threshold {}", threshold_percentile);
     
     let width = flow_model.dem.width;
@@ -280,5 +280,55 @@ pub fn generate_stream_network(flow_model: &FlowModel, threshold_percentile: f32
     }
     
     println!("Generated {} stream polylines", polylines.len());
+    
+    // Add smoothing step at the end
+    let mut polylines = polylines;
+    
+    // Apply smoothing if iterations > 0
+    if smooth_iterations > 0 {
+        smooth_stream_polylines(&mut polylines, smooth_iterations);
+    }
+    
     polylines
+}
+
+pub fn smooth_stream_polylines(polylines: &mut Vec<Vec<(usize, usize)>>, iterations: usize) {
+    for polyline in polylines.iter_mut() {
+        if polyline.len() < 3 {
+            continue;  // Too short to smooth
+        }
+        
+        for _ in 0..iterations {
+            let original = polyline.clone();
+            let mut smoothed = Vec::with_capacity(original.len() * 2 - 2);
+            
+            // Add first point
+            smoothed.push(original[0]);
+            
+            // Apply Chaikin's algorithm for corner cutting
+            for i in 0..original.len() - 1 {
+                let p0 = original[i];
+                let p1 = original[i + 1];
+                
+                // Generate two points at 1/4 and 3/4 between each pair
+                let q = (
+                    p0.0 * 3 / 4 + p1.0 / 4,
+                    p0.1 * 3 / 4 + p1.1 / 4
+                );
+                let r = (
+                    p0.0 / 4 + p1.0 * 3 / 4,
+                    p0.1 / 4 + p1.1 * 3 / 4
+                );
+                
+                smoothed.push(q);
+                smoothed.push(r);
+            }
+            
+            // Add last point
+            smoothed.push(original[original.len() - 1]);
+            
+            // Update the polyline
+            *polyline = smoothed;
+        }
+    }
 }

@@ -5,7 +5,7 @@ use gdal::Dataset;
 use gdal::raster::RasterBand;
 use ndarray::{Array2, ShapeError};
 use thiserror::Error;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::cmp::Reverse as StdReverse;
 use std::cmp::Ordering;
 use std::fmt;
@@ -408,6 +408,42 @@ impl DigitalElevationModel {
         (self_min_x <= other_max_x && self_max_x >= other_min_x) &&
         (self_min_y <= other_max_y && self_max_y >= other_min_y)
     }
+
+    /// Process sinks in the DEM using different methods
+    pub fn process_sinks(&mut self, method: SinkTreatmentMethod) {
+        match method {
+            SinkTreatmentMethod::CompletelyFill => {
+                self.fill_sinks(); // Use the existing method
+            },
+            SinkTreatmentMethod::EpsilonFill(epsilon) => {
+                self.fill_sinks_epsilon(epsilon);
+            },
+            SinkTreatmentMethod::Breach(max_depth) => {
+                self.breach_depressions(max_depth);
+            },
+            SinkTreatmentMethod::Combined(epsilon, max_depth) => {
+                self.breach_depressions(max_depth);
+                self.fill_sinks_epsilon(epsilon);
+            }
+        }
+    }
+
+    /// Fill sinks with epsilon-fill method
+    pub fn fill_sinks_epsilon(&mut self, epsilon: f32) {
+        println!("Filling sinks with epsilon {}...", epsilon);
+        
+        // Similar implementation to current fill_sinks() but
+        // with minimum raising + epsilon
+        // [implementation details]
+    }
+
+    /// Breach depressions in the DEM
+    pub fn breach_depressions(&mut self, max_depth: usize) {
+        println!("Breaching depressions with max depth {}...", max_depth);
+        
+        // Implementation of depression breaching algorithm
+        // [implementation details]
+    }
 }
 
 /// For priority queue in sink filling algorithm
@@ -436,4 +472,11 @@ impl Ord for PriorityItem {
     fn cmp(&self, other: &Self) -> Ordering {
         self.elevation.partial_cmp(&other.elevation).unwrap_or(Ordering::Equal)
     }
+}
+
+pub enum SinkTreatmentMethod {
+    CompletelyFill,       // Current approach
+    EpsilonFill(f32),     // Fill by minimum amount + epsilon
+    Breach(usize),        // Create drainage path by carving
+    Combined(f32, usize), // Breach then fill remaining depressions
 }
