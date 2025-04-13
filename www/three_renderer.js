@@ -360,11 +360,12 @@ export class TerrainRenderer {
         // Create the color gradient matching the terrain colors
         let gradientColors = '';
         gradientColors += 'linear-gradient(to top,';
-        gradientColors += ' rgb(33, 84, 20) 0%,';     // Forest green (lowest)
-        gradientColors += ' rgb(77, 140, 38) 20%,';   // Olive green
-        gradientColors += ' rgb(230, 179, 0) 40%,';   // Yellow
-        gradientColors += ' rgb(230, 76, 0) 60%,';    // Orange
-        gradientColors += ' rgb(230, 25, 25) 80%,';   // Red
+        gradientColors += ' rgb(128, 128, 128) 0%,';  // Gray (0 elevation)
+        gradientColors += ' rgb(33, 84, 20) 16%,';    // Forest green 
+        gradientColors += ' rgb(77, 140, 38) 33%,';   // Olive green
+        gradientColors += ' rgb(230, 179, 0) 50%,';   // Yellow
+        gradientColors += ' rgb(230, 76, 0) 67%,';    // Orange
+        gradientColors += ' rgb(230, 25, 25) 84%,';   // Red
         gradientColors += ' rgb(60, 0, 153) 100%)';   // Purple (highest)
         
         gradientBar.style.background = gradientColors;
@@ -381,13 +382,19 @@ export class TerrainRenderer {
         valueContainer.style.left = '60px'; // Increased to move numbers more to the right
         
         // Add elevation values starting from bottom (min height) to top (max height)
-        const numLabels = 5;
-        for (let i = numLabels; i >= 0; i--) {
-            const value = minHeight + (maxHeight - minHeight) * (i / numLabels);
+        const numLabels = 6; // Increased to 6 to include 0 level
+        for (let i = numLabels - 1; i >= 0; i--) {
+            const value = minHeight + (maxHeight - minHeight) * (i / (numLabels - 1));
             const valueLabel = document.createElement('div');
             valueLabel.textContent = Math.round(value);
-            valueLabel.style.fontSize = '11px';
-            valueLabel.style.color = '#000';
+            valueLabel.style.fontSize = '13px';
+            valueLabel.style.color = 'white';
+            valueLabel.style.fontWeight = 'bold';
+            valueLabel.style.textShadow = '1px 1px 2px rgba(0, 0, 0, 0.8)';
+            valueLabel.style.backgroundColor = 'rgba(0, 0, 0, 0.6)';
+            valueLabel.style.padding = '3px 6px';
+            valueLabel.style.borderRadius = '4px';
+            valueLabel.style.marginLeft = '5px';
             valueContainer.appendChild(valueLabel);
         }
         
