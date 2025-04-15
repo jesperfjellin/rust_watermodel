@@ -163,6 +163,11 @@ export class TerrainRenderer {
     }
     
     createSimpleTerrain(terrainData, width, height, resolution, scaleDown) {
+        // Hide the grid helper now that we're loading a terrain
+        if (this.gridHelper) {
+            this.gridHelper.visible = false;
+        }
+        
         // Follow original logic for detail level calculation
         const maxVerticesPerDimension = 1600;
         
@@ -234,8 +239,9 @@ export class TerrainRenderer {
         console.log(`Terrain elevation range: ${minHeight} to ${maxHeight}`);
         console.log(`Average elevation: ${avgElevation}`);
         
-        // Use original renderer's height scale calculation
-        const heightScale = (3.0 - skipFactor * 0.1) * scaleDown;
+        // Use a simple, consistent, stronger height exaggeration
+        // This gives reliable results regardless of terrain characteristics
+        const heightScale = 6.0 * scaleDown;
         this.heightScale = heightScale;
         
         console.log(`Using height scale: ${heightScale}`);
