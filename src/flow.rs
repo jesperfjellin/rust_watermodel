@@ -666,4 +666,84 @@ impl FlowModel {
         web_sys::console::log_1(&format!("Generated {} high-quality stream polylines", polylines.len()).into());
         polylines
     }
+    
+    /// Extract a hierarchical stream network with multi-level detail
+    pub fn extract_hierarchical_streams(&self) -> Vec<(Vec<Vec<(usize, usize)>>, f32)> {
+        let width = self.dem.width;
+        let height = self.dem.height;
+        
+        // Find the maximum flow accumulation value
+        let max_flow = self.flow_accumulation.iter()
+            .fold(0.0_f32, |max, &val| max.max(val));
+        
+        // Define hierarchical thresholds - use only 2 levels for better performance
+        // Level 1: Major rivers (5% of max flow) - far fewer streams
+        // Level 2: Secondary streams (1% of max flow)
+        let thresholds = [
+            max_flow * 0.05,  // Level 1 - Only the largest main rivers (5%)
+            max_flow * 0.01,  // Level 2 - Significant tributaries (1%)
+        ];
+        
+        let mut hierarchical_streams = Vec::new();
+        
+        // Process each threshold level with a limit on stream count
+        for &threshold in &thresholds {
+            // Generate polylines with the current threshold
+            let mut polylines = self.extract_high_quality_streams(threshold / max_flow);
+            
+            // Limit the number of polylines to avoid excessive memory usage
+            // Sort by average flow accumulation to keep the most important streams
+            polylines.sort_by(|a, b| {
+                // Calculate average flow for each polyline
+                let avg_flow_a = self.calculate_polyline_importance(&a);
+                let avg_flow_b = self.calculate_polyline_importance(&b);
+                
+                // Sort descending (highest flow first)
+                avg_flow_b.partial_cmp(&avg_flow_a).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            
+            // Limit to a reasonable number of streams per level
+            let max_streams = 150; // Significantly reduced from potentially thousands
+            if polylines.len() > max_streams {
+                polylines.truncate(max_streams);
+            }
+            
+            web_sys::console::log_1(&format!("Level with threshold {}: kept {} streams (limited from original)", 
+                threshold, polylines.len()).into());
+            
+            // Store the polylines with their importance level (threshold)
+            hierarchical_streams.push((polylines, threshold));
+        }
+        
+        web_sys::console::log_1(&format!("Generated hierarchical streams with {} levels", hierarchical_streams.len()).into());
+        hierarchical_streams
+    }
+
+    // Helper to calculate importance of a polyline based on flow accumulation
+    fn calculate_polyline_importance(&self, polyline: &Vec<(usize, usize)>) -> f32 {
+        if polyline.is_empty() {
+            return 0.0;
+        }
+        
+        let width = self.dem.width;
+        let mut total_flow = 0.0;
+        
+        // Sample just a few points along the polyline to calculate importance
+        // This is faster than using every point for sorting
+        let num_samples = 3.min(polyline.len());
+        let step = polyline.len() / num_samples;
+        
+        for i in 0..num_samples {
+            let idx = i * step;
+            if idx < polyline.len() {
+                let (x, y) = polyline[idx];
+                let flow_idx = y * width + x;
+                if flow_idx < self.flow_accumulation.len() {
+                    total_flow += self.flow_accumulation[flow_idx];
+                }
+            }
+        }
+        
+        total_flow / num_samples as f32
+    }
 }

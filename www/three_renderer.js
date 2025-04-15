@@ -3,60 +3,72 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 export class TerrainRenderer {
     constructor(canvas) {
-        // Initialize Three.js components
+        // Basic properties
         this.canvas = canvas;
-        this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(0xf0f0f0);
-        
-        // Camera setup
-        this.camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 100000);
-        this.camera.position.set(0, 200, 400);
-        this.camera.lookAt(0, 0, 0);
-        
-        // Renderer setup
-        this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-        this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-        this.renderer.shadowMap.enabled = true;
-        
-        // Controls for camera
-        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.enableDamping = true;
-        this.controls.dampingFactor = 0.25;
-        
-        // Lighting
-        this.addLights();
-        
-        // Data storage
+        this.scene = null;
+        this.camera = null;
+        this.renderer = null;
+        this.controls = null;
         this.terrainMesh = null;
-        this.particleSystem = null; // We keep this reference but won't create it
-        this.streamLines = null;
-        
-        // Stats
-        this.dimensions = null;
-        this.flowData = null;
-        this.streamData = null;
-        this.slopeData = null;
-        this.velocityData = null;
-        this.spawnPoints = null;
-        
-        // Legend element
+        this.gridHelper = null;
         this.legendElement = null;
-        this.flowLegendElement = null;
+        this.rawTerrainData = null;
+        this.terrainScale = 1.0;
+        this.heightScale = 1.0;
         
-        // Animation - we disable particle animation
-        this.isAnimating = false;
-        this.showWater = false;
-        
-        // Stream pulse animation
-        this.pulseObjects = [];
-        this.pulseAnimations = [];
-        this.flowSpeed = 1.0; // speed multiplier
-        
-        // Setup resize handler
-        window.addEventListener('resize', () => this.resize());
-        
-        // Start render loop
-        this.animate();
+        // Initialize the 3D components
+        this.init();
+    }
+    
+    init() {
+        try {
+            // Create scene with light background as in original renderer
+            this.scene = new THREE.Scene();
+            this.scene.background = new THREE.Color(0xf0f0f0);
+            
+            // Create camera with reasonable defaults
+            this.camera = new THREE.PerspectiveCamera(
+                45, 
+                this.canvas.clientWidth / this.canvas.clientHeight,
+                0.1, 
+                100000
+            );
+            
+            // Start with camera positioned as in original renderer
+            this.camera.position.set(0, 200, 400);
+            this.camera.lookAt(0, 0, 0);
+            
+            // Create renderer with settings from original
+            this.renderer = new THREE.WebGLRenderer({
+                canvas: this.canvas,
+                antialias: true
+            });
+            this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+            this.renderer.shadowMap.enabled = true;
+            
+            // Add orbit controls for camera manipulation with original damping
+            this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+            this.controls.enableDamping = true;
+            this.controls.dampingFactor = 0.25;
+            
+            // Add enhanced lighting from original renderer
+            this.addLights();
+            
+            // Add a helper grid for reference
+            this.gridHelper = new THREE.GridHelper(1000, 10);
+            this.scene.add(this.gridHelper);
+            
+            // Add axes helper to show X, Y, Z directions
+            const axesHelper = new THREE.AxesHelper(100);
+            this.scene.add(axesHelper);
+            
+            // Start animation loop
+            this.animate();
+            
+            console.log("TerrainRenderer initialized successfully");
+        } catch (error) {
+            console.error("Failed to initialize TerrainRenderer:", error);
+        }
     }
     
     addLights() {
@@ -77,7 +89,7 @@ export class TerrainRenderer {
         dirLight.shadow.bias = -0.001;
         
         // Set up shadow camera frustum to cover terrain
-        const shadowExtent = 100;
+        const shadowExtent = 300;
         dirLight.shadow.camera.left = -shadowExtent;
         dirLight.shadow.camera.right = shadowExtent;
         dirLight.shadow.camera.top = shadowExtent;
@@ -91,184 +103,68 @@ export class TerrainRenderer {
         this.scene.add(secondaryLight);
     }
     
-    resize() {
+    animate() {
         if (!this.renderer) return;
         
-        const width = this.canvas.clientWidth;
-        const height = this.canvas.clientHeight;
-        
-        this.camera.aspect = width / height;
-        this.camera.updateProjectionMatrix();
-        this.renderer.setSize(width, height);
-    }
-    
-    animate() {
         requestAnimationFrame(() => this.animate());
         
-        // Update controls
-        this.controls.update();
+        if (this.controls) {
+            this.controls.update();
+        }
         
-        // We no longer update pulses
-        
-        // Render the scene
         this.renderer.render(this.scene, this.camera);
     }
     
-    setTerrainData(terrainData, dimensions) {
-        // Store dimensions
-        this.dimensions = dimensions;
-        const [width, height, resolution] = dimensions;
+    resize() {
+        if (!this.camera || !this.renderer) return;
         
-        // Store raw terrain data for height lookups
+        this.camera.aspect = this.canvas.clientWidth / this.canvas.clientHeight;
+        this.camera.updateProjectionMatrix();
+        this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+    }
+    
+    setTerrainData(terrainData, dimensions) {
+        // Store dimensions and raw data as in original renderer
+        this.dimensions = dimensions;
         this.rawTerrainData = terrainData;
         
-        // Clear previous terrain
-        if (this.terrainMesh) {
-            this.scene.remove(this.terrainMesh);
-        }
+        const [width, height, resolution] = dimensions;
         
-        // Use more moderate scaling for better visual quality
+        console.log(`Setting terrain data: ${width}x${height}, resolution: ${resolution}`);
+        
+        // Calculate scale factor using original renderer's logic
+        // Use more moderate scaling for better visual quality as in original
         let scaleDown;
         if (Math.max(width, height) > 5000) {
-            scaleDown = 0.3; // Increased from 0.2 to 0.3 for very large DEMs
+            scaleDown = 0.3; // Larger value than our previous code
         } else if (Math.max(width, height) > 3000) {
-            scaleDown = 0.4; // Increased from 0.3 to 0.4 for large DEMs 
+            scaleDown = 0.4;
         } else if (Math.max(width, height) > 1000) {
-            scaleDown = 0.6; // Increased from 0.5 to 0.6 for medium DEMs
+            scaleDown = 0.6;
         } else {
             scaleDown = 1.0; // No reduction for small DEMs
         }
         
         console.log(`Using scale factor: ${scaleDown} for terrain of size ${width}x${height}`);
         
-        // Store scale for use in other methods
+        // Store scale for use in other methods as in original
         this.terrainScale = scaleDown;
         
-        // Always use simple terrain rendering with optimal quality settings
+        // Clear any existing terrain
+        if (this.terrainMesh) {
+            this.scene.remove(this.terrainMesh);
+            this.terrainMesh.geometry.dispose();
+            this.terrainMesh.material.dispose();
+            this.terrainMesh = null;
+        }
+        
+        // Create simplified high-quality terrain similar to original
         this.createSimpleTerrain(terrainData, width, height, resolution, scaleDown);
     }
     
-    createTerrainTile(terrainData, fullWidth, fullHeight, startX, startY, tileWidth, tileHeight, resolution, scaleDown, skipFactor, minHeight, maxHeight) {
-        // Calculate mesh dimensions based on skip factor
-        const meshWidth = Math.ceil(tileWidth / skipFactor);
-        const meshHeight = Math.ceil(tileHeight / skipFactor);
-        
-        // Add an extra vertex on each edge to create overlapping geometry
-        const geometryWidth = meshWidth + 2;
-        const geometryHeight = meshHeight + 2;
-        
-        // Create a plane geometry for this tile with extra vertices for overlap
-        const geometry = new THREE.PlaneGeometry(
-            tileWidth * resolution * scaleDown * 1.05, // Slightly larger plane
-            tileHeight * resolution * scaleDown * 1.05, // Slightly larger plane
-            geometryWidth,
-            geometryHeight
-        );
-        
-        // Create colors array for vertex coloring
-        const colors = new Float32Array(geometry.attributes.position.count * 3);
-        
-        // Set elevations and colors
-        for (let y = 0; y < meshHeight + 1; y++) {
-            for (let x = 0; x < meshWidth + 1; x++) {
-                // Map mesh coordinates to original DEM coordinates
-                const demX = Math.min(fullWidth - 1, startX + x * skipFactor);
-                const demY = Math.min(fullHeight - 1, startY + y * skipFactor);
-                const demIndex = demY * fullWidth + demX;
-                const vertexIndex = y * (meshWidth + 1) + x;
-                
-                if (vertexIndex >= geometry.attributes.position.count) continue;
-                
-                // Get elevation and filter out invalid values
-                let elevation = terrainData[demIndex];
-                
-                // If invalid elevation (negative or NaN), use slightly below minHeight
-                if (isNaN(elevation) || elevation < 0) {
-                    elevation = minHeight - 5;
-                }
-                
-                // Set Z value for this vertex
-                // Increase the height exaggeration factor for better visibility (higher for smaller skip factors)
-                const heightScale = (3.0 - skipFactor * 0.1) * scaleDown;
-                geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
-                
-                // Set vertex color based on elevation
-                const i3 = vertexIndex * 3;
-                
-                if (elevation <= 0.0) {
-                    // Neutral gray for elevation 0.0
-                    colors[i3] = 0.5;     // R
-                    colors[i3 + 1] = 0.5; // G
-                    colors[i3 + 2] = 0.5; // B
-                } else {
-                    // Create a gradient for elevation values
-                    // Normalize elevation within range
-                    const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - minHeight) / (maxHeight - minHeight)));
-                    
-                    // Use the same color scheme as in the original code
-                    // ... existing color gradient code ...
-                    if (normalizedHeight < 0.2) {
-                        // Forest green to olive green (0.1-0.2)
-                        const t = normalizedHeight / 0.2;
-                        colors[i3] = 0.13 + t * 0.17;    // R: 0.13 to 0.3
-                        colors[i3 + 1] = 0.33 + t * 0.22; // G: 0.33 to 0.55
-                        colors[i3 + 2] = 0.08 + t * 0.07; // B: 0.08 to 0.15
-                    } else if (normalizedHeight < 0.4) {
-                        // Olive green to yellow (0.2-0.4)
-                        const t = (normalizedHeight - 0.2) / 0.2;
-                        colors[i3] = 0.3 + t * 0.6;      // R: 0.3 to 0.9
-                        colors[i3 + 1] = 0.55 + t * 0.15; // G: 0.55 to 0.7
-                        colors[i3 + 2] = 0.15 - t * 0.15; // B: 0.15 to 0.0
-                    } else if (normalizedHeight < 0.6) {
-                        // Yellow to orange (0.4-0.6)
-                        const t = (normalizedHeight - 0.4) / 0.2;
-                        colors[i3] = 0.9;               // R: 0.9 to 0.9
-                        colors[i3 + 1] = 0.7 - t * 0.4; // G: 0.7 to 0.3
-                        colors[i3 + 2] = 0.0;           // B: 0 to 0
-                    } else if (normalizedHeight < 0.8) {
-                        // Orange to red (0.6-0.8)
-                        const t = (normalizedHeight - 0.6) / 0.2;
-                        colors[i3] = 0.9;               // R: 0.9 to 0.9
-                        colors[i3 + 1] = 0.3 - t * 0.2; // G: 0.3 to 0.1
-                        colors[i3 + 2] = 0.0 + t * 0.1; // B: 0 to 0.1
-                    } else {
-                        // Red to purple (0.8-1.0)
-                        const t = (normalizedHeight - 0.8) / 0.2;
-                        colors[i3] = 0.9 - t * 0.3;     // R: 0.9 to 0.6
-                        colors[i3 + 1] = 0.1 - t * 0.1; // G: 0.1 to 0
-                        colors[i3 + 2] = 0.1 + t * 0.5; // B: 0.1 to 0.6
-                    }
-                }
-            }
-        }
-        
-        // Add color attribute to geometry
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        
-        // Update the geometry
-        geometry.attributes.position.needsUpdate = true;
-        geometry.computeVertexNormals();
-        
-        // Create terrain material with vertex colors
-        const material = new THREE.MeshStandardMaterial({
-            vertexColors: true,
-            metalness: 0.0,
-            roughness: 0.7,
-            side: THREE.DoubleSide,
-        });
-        
-        // Create and return the tile mesh
-        const tileMesh = new THREE.Mesh(geometry, material);
-        tileMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
-        tileMesh.receiveShadow = true;
-        
-        return tileMesh;
-    }
-    
-    // Create simplified high-quality terrain
     createSimpleTerrain(terrainData, width, height, resolution, scaleDown) {
-        // Increase the maximum vertex count for higher quality
-        const maxVerticesPerDimension = 1600; // Increased from 1000 to 1600
+        // Follow original logic for detail level calculation
+        const maxVerticesPerDimension = 1600;
         
         // Calculate how many vertices to use based on DEM size
         let meshWidth = width;
@@ -276,11 +172,10 @@ export class TerrainRenderer {
         let skipFactor = 1;
         
         // If DEM is too large, calculate a skip factor to reduce resolution
-        // but use a more aggressive approach to keep more detail
+        // using the original's more aggressive approach
         if (width > maxVerticesPerDimension || height > maxVerticesPerDimension) {
-            // Use lower skip factor for better quality
             skipFactor = Math.max(1, Math.ceil(Math.max(width, height) / maxVerticesPerDimension));
-            // For very large DEMs, try to use at least 25% more vertices than before
+            // For very large DEMs, try to use more vertices than before as in original
             if (skipFactor > 3) {
                 skipFactor = Math.floor(skipFactor * 0.75);
             }
@@ -290,41 +185,33 @@ export class TerrainRenderer {
             console.log(`DEM too large for WebGL, using ${meshWidth}x${meshHeight} vertices with skip factor ${skipFactor}`);
         }
         
-        // Store metadata for stream line height calculations
+        // Store metadata for stream line height calculations as in original
         this.terrainMetadata = {
             skipFactor: skipFactor,
             meshWidth: meshWidth,
             meshHeight: meshHeight
         };
         
-        // Create terrain geometry with appropriate detail level
+        // Create terrain geometry with scaled dimensions
         const geometry = new THREE.PlaneGeometry(
-            width * resolution * scaleDown, 
+            width * resolution * scaleDown,
             height * resolution * scaleDown,
             meshWidth,
             meshHeight
         );
         
-        // Set proper elevation using the DEM data with subsampling if needed
+        // Find elevation range for proper scaling
         let minHeight = Infinity;
         let maxHeight = -Infinity;
-        
-        // Find an average elevation to use as a base level for no-data areas
         let validElevations = [];
-        let avgElevation = 0;
         
-        // First pass: collect valid elevations
-        for (let y = 0; y < meshHeight; y++) {
-            for (let x = 0; x < meshWidth; x++) {
-                // Map mesh coordinates to original DEM coordinates
-                const demX = Math.min(width - 1, x * skipFactor);
-                const demY = Math.min(height - 1, y * skipFactor);
-                const demIndex = demY * width + demX;
+        // First pass: collect valid elevations (no negatives, as required)
+        for (let y = 0; y < height; y += skipFactor) {
+            for (let x = 0; x < width; x += skipFactor) {
+                const index = y * width + x;
+                const elevation = terrainData[index];
                 
-                // Get elevation
-                const elevation = terrainData[demIndex];
-                
-                // Only consider valid elevations (not NaN or negative)
+                // Only consider valid elevations (not NaN or negative) as in original
                 if (!isNaN(elevation) && elevation >= 0) {
                     validElevations.push(elevation);
                     minHeight = Math.min(minHeight, elevation);
@@ -333,27 +220,30 @@ export class TerrainRenderer {
             }
         }
         
-        // Calculate average elevation from valid values
+        // Calculate average elevation from valid values as in original
+        let avgElevation = 0;
         if (validElevations.length > 0) {
             avgElevation = validElevations.reduce((a, b) => a + b, 0) / validElevations.length;
         } else {
             // Fallback if no valid elevations found
             avgElevation = 0;
             minHeight = 0;
-            maxHeight = 0;
+            maxHeight = 1;
         }
         
         console.log(`Terrain elevation range: ${minHeight} to ${maxHeight}`);
         console.log(`Average elevation: ${avgElevation}`);
         
+        // Use original renderer's height scale calculation
+        const heightScale = (3.0 - skipFactor * 0.1) * scaleDown;
+        this.heightScale = heightScale;
+        
+        console.log(`Using height scale: ${heightScale}`);
+        
         // Create colors array for vertex coloring
         const colors = new Float32Array(geometry.attributes.position.count * 3);
         
-        // Use a higher height scale for better visualization
-        const heightScale = 2.0 * scaleDown;
-        this.heightScale = heightScale;
-        
-        // Second pass: set elevations and colors, replacing invalid values with slightly below the min valid height
+        // Set elevations and colors using original approach
         for (let y = 0; y < meshHeight + 1; y++) {
             for (let x = 0; x < meshWidth + 1; x++) {
                 // Map mesh coordinates to original DEM coordinates
@@ -364,31 +254,33 @@ export class TerrainRenderer {
                 
                 if (vertexIndex >= geometry.attributes.position.count) continue;
                 
-                // Get elevation and filter out invalid values
+                // Get elevation and filter out invalid values as in original
                 let elevation = terrainData[demIndex];
                 
-                // If invalid elevation (negative or NaN), use slightly below minHeight
+                // Critical: If invalid elevation (negative or NaN), use slightly below minHeight as in original
                 if (isNaN(elevation) || elevation < 0) {
-                    elevation = minHeight - 10; // Set clearly below valid terrain
+                    // Instead of rendering, set clearly below valid terrain to avoid render
+                    elevation = minHeight - 10;
                 }
                 
                 // Set Z value for this vertex with height exaggeration
                 geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
                 
-                // Set vertex color based on elevation
+                // Set vertex color based on elevation using original gradient
                 const i3 = vertexIndex * 3;
                 
+                // Skip coloring for negative/invalid elevations (will not be visible)
                 if (elevation <= 0.0) {
                     // Neutral gray for elevation 0.0
                     colors[i3] = 0.5;     // R
                     colors[i3 + 1] = 0.5; // G
                     colors[i3 + 2] = 0.5; // B
                 } else {
-                    // Create a gradient for elevation values > 0.1
+                    // Create a gradient for elevation values using original gradient
                     // Normalize elevation within range
                     const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - minHeight) / (maxHeight - minHeight)));
                     
-                    // Improved color gradient code for better terrain visualization
+                    // Improved color gradient code from original renderer
                     if (normalizedHeight < 0.2) {
                         // Forest green to olive green (0.1-0.2)
                         const t = normalizedHeight / 0.2;
@@ -431,7 +323,7 @@ export class TerrainRenderer {
         geometry.attributes.position.needsUpdate = true;
         geometry.computeVertexNormals();
         
-        // Create terrain material with vertex colors
+        // Create original renderer's material
         const material = new THREE.MeshStandardMaterial({
             vertexColors: true,
             metalness: 0.0,
@@ -450,31 +342,25 @@ export class TerrainRenderer {
         // Create elevation legend
         this.createElevationLegend(minHeight, maxHeight);
         
-        // Setup camera
+        // Setup camera using original positioning logic
         this.setupCamera(width, height, resolution, scaleDown);
     }
     
-    // Add a setupCamera method to position camera appropriately
-    setupCamera(width, height, resolution, scaleDown, centerTile = null) {
+    // Setup camera as in original renderer
+    setupCamera(width, height, resolution, scaleDown) {
         // Calculate terrain dimensions
         const terrainWidth = width * resolution * scaleDown;
         const terrainHeight = height * resolution * scaleDown;
         const terrainSize = Math.max(terrainWidth, terrainHeight);
         
         // Set camera position to view the entire terrain
-        // Position camera based on terrain size
+        // Using original renderer's positioning approach
         const cameraHeight = terrainSize * 0.8;
         const cameraDistance = terrainSize * 0.7;
         
         this.camera.position.set(0, cameraHeight, cameraDistance);
         this.camera.lookAt(0, 0, 0);
-        
-        // Update controls target if we have a center tile
-        if (centerTile) {
-            this.controls.target.copy(centerTile.position);
-        } else {
-            this.controls.target.set(0, 0, 0);
-        }
+        this.controls.target.set(0, 0, 0);
         
         // Log camera information
         console.log("Camera positioned at:", this.camera.position);
@@ -483,7 +369,7 @@ export class TerrainRenderer {
         console.log("Scale factor applied:", scaleDown);
     }
     
-    // Create a vertical gradient legend showing elevation values
+    // Create elevation legend from original renderer
     createElevationLegend(minHeight, maxHeight) {
         // Remove existing legend if any
         if (this.legendElement) {
@@ -512,12 +398,11 @@ export class TerrainRenderer {
         // Create the color gradient matching the terrain colors
         let gradientColors = '';
         gradientColors += 'linear-gradient(to top,';
-        gradientColors += ' rgb(128, 128, 128) 0%,';  // Gray (0 elevation)
-        gradientColors += ' rgb(33, 84, 20) 16%,';    // Forest green 
-        gradientColors += ' rgb(77, 140, 38) 33%,';   // Olive green
-        gradientColors += ' rgb(230, 179, 0) 50%,';   // Yellow
-        gradientColors += ' rgb(230, 76, 0) 67%,';    // Orange
-        gradientColors += ' rgb(230, 25, 25) 84%,';   // Red
+        gradientColors += ' rgb(33, 84, 20) 0%,';    // Forest green
+        gradientColors += ' rgb(77, 140, 38) 20%,';   // Olive green
+        gradientColors += ' rgb(230, 179, 0) 40%,';   // Yellow
+        gradientColors += ' rgb(230, 76, 0) 60%,';    // Orange
+        gradientColors += ' rgb(230, 25, 25) 80%,';   // Red
         gradientColors += ' rgb(60, 0, 153) 100%)';   // Purple (highest)
         
         gradientBar.style.background = gradientColors;
@@ -530,11 +415,11 @@ export class TerrainRenderer {
         valueContainer.style.justifyContent = 'space-between';
         valueContainer.style.height = '200px';
         valueContainer.style.position = 'absolute';
-        valueContainer.style.top = '10px'; // No title offset now
-        valueContainer.style.left = '60px'; // Increased to move numbers more to the right
+        valueContainer.style.top = '10px';
+        valueContainer.style.left = '60px';
         
         // Add elevation values starting from bottom (min height) to top (max height)
-        const numLabels = 6; // Increased to 6 to include 0 level
+        const numLabels = 6;
         for (let i = numLabels - 1; i >= 0; i--) {
             const value = minHeight + (maxHeight - minHeight) * (i / (numLabels - 1));
             const valueLabel = document.createElement('div');
@@ -559,655 +444,38 @@ export class TerrainRenderer {
         this.legendElement = legend;
     }
     
-    // Set comprehensive water visualization data
-    setWaterVisualizationData(waterData) {
-        try {
-            // Check water data structure and assign properties safely
-            this.flowData = waterData.flow_accumulation || [];
-            this.slopeData = waterData.slopes || [];
-            
-            // Store velocities data but don't create particles
-            if (waterData.velocities) {
-                // Make sure velocities data is an array
-                if (Array.isArray(waterData.velocities)) {
-                    this.velocityData = waterData.velocities;
-                } else {
-                    console.warn("Velocities data is not in expected format");
-                    this.velocityData = [];
-                }
-            } else {
-                this.velocityData = [];
-            }
-            
-            // We no longer create particles - pulses are our primary animation
-            // this.createParticleSystem();
-        } catch (error) {
-            console.error("Error processing water visualization data:", error);
-        }
-    }
+    // Stub methods to maintain compatibility with existing code
+    setWaterVisualizationData() {}
+    setStreamSpawnPoints() {}
+    setStreamPolylines() {}
+    setSlopeData() {}
     
-    // Set slope data for visualization
-    setSlopeData(slopeData) {
-        this.slopeData = slopeData;
-    }
-    
-    // Set stream spawn points for better particle placement
-    setStreamSpawnPoints(spawnPointsData) {
-        if (!spawnPointsData || spawnPointsData.length === 0) return;
-        
-        // Convert flat array [x1, y1, x2, y2, ...] to array of points [{x, y}, ...]
-        this.spawnPoints = [];
-        for (let i = 0; i < spawnPointsData.length; i += 2) {
-            this.spawnPoints.push({
-                x: spawnPointsData[i],
-                y: spawnPointsData[i + 1]
-            });
+    // Clean up resources
+    dispose() {
+        // Remove elevation legend if it exists
+        if (this.legendElement) {
+            document.body.removeChild(this.legendElement);
+            this.legendElement = null;
         }
         
-        console.log(`Got ${this.spawnPoints.length} stream spawn points`);
-    }
-    
-    // Set stream polylines with improved positioning
-    setStreamPolylines(polylines) {
-        if (!polylines || !this.dimensions) return;
-        console.log(`Processing ${polylines.length} stream polylines`);
-        
-        // Clean up previous stream lines
-        if (this.streamLines) {
-            this.scene.remove(this.streamLines);
-            this.streamLines = null;
+        if (this.terrainMesh) {
+            this.scene.remove(this.terrainMesh);
+            this.terrainMesh.geometry.dispose();
+            this.terrainMesh.material.dispose();
+            this.terrainMesh = null;
         }
         
-        // Clean up animation timers
-        if (this.pulseAnimations) {
-            for (const timer of this.pulseAnimations) {
-                clearInterval(timer);
-            }
-            this.pulseAnimations = [];
+        if (this.controls) {
+            this.controls.dispose();
+            this.controls = null;
         }
         
-        // Clear any existing pulse objects
-        for (const pulse of this.pulseObjects || []) {
-            if (pulse.mesh) {
-                this.scene.remove(pulse.mesh);
-                pulse.mesh.geometry.dispose();
-                pulse.mesh.material.dispose();
-            }
-        }
-        this.pulseObjects = [];
-        
-        const [width, height, resolution] = this.dimensions;
-        const scaleDown = this.terrainScale || 1.0;
-        const heightScale = this.heightScale || 2.0 * scaleDown;
-        
-        // Create a group for all stream lines
-        this.streamLines = new THREE.Group();
-        
-        // Material for stream lines - blue for better visibility
-        const lineMaterial = new THREE.LineBasicMaterial({
-            color: 0x0088ff,
-            linewidth: 3.0,
-            opacity: 1,
-            transparent: true
-        });
-        
-        // Calculate bounds of the terrain mesh to filter out stream lines outside the terrain
-        const terrainBounds = {
-            minX: -(width * resolution * scaleDown) / 2,
-            maxX: (width * resolution * scaleDown) / 2,
-            minZ: -(height * resolution * scaleDown) / 2,
-            maxZ: (height * resolution * scaleDown) / 2
-        };
-        
-        // Process each polyline without a limit
-        for (const polyline of polylines) {
-            if (polyline.length < 2) continue; // Skip empty lines
-            
-            const points = [];
-            let allPointsInBounds = true;
-            
-            // Convert from grid coordinates to world coordinates and add points
-            for (let i = 0; i < polyline.length; i++) {
-                const [x, y] = polyline[i];
-                
-                // Skip points outside the DEM
-                if (x < 0 || x >= width || y < 0 || y >= height) {
-                    allPointsInBounds = false;
-                    continue;
-                }
-                
-                // Map to the correct coordinate system for the simple terrain
-                const worldX = (x - width/2) * resolution * scaleDown;
-                const worldZ = (y - height/2) * resolution * scaleDown;
-                
-                // Check if point is within terrain bounds (with small margin)
-                if (worldX < terrainBounds.minX || worldX > terrainBounds.maxX || 
-                    worldZ < terrainBounds.minZ || worldZ > terrainBounds.maxZ) {
-                    allPointsInBounds = false;
-                    continue;
-                }
-                
-                // Get height from raw terrain data
-                const idx = y * width + x;
-                let elevation = 0;
-                if (this.rawTerrainData && idx < this.rawTerrainData.length) {
-                    elevation = this.rawTerrainData[idx] || 0;
-                    // Apply same height exaggeration as terrain
-                    elevation = elevation * heightScale;
-                }
-                
-                // Add small offset to ensure visibility above terrain
-                elevation += 0.5;
-                
-                points.push(new THREE.Vector3(worldX, elevation, worldZ));
-            }
-            
-            // Only create polyline if it has enough points and is within the terrain
-            if (points.length >= 2 && allPointsInBounds) {
-                const geometry = new THREE.BufferGeometry().setFromPoints(points);
-                const line = new THREE.Line(geometry, lineMaterial);
-                this.streamLines.add(line);
-            }
+        if (this.renderer) {
+            this.renderer.dispose();
+            this.renderer = null;
         }
         
-        // Add all stream lines to the scene
-        this.scene.add(this.streamLines);
-        console.log(`Created ${this.streamLines.children.length} stream lines`);
-    }
-    
-    // Helper method to get terrain height at a specific point
-    getTerrainHeightAtPoint(x, y) {
-        if (!this.terrainMesh) return 0;
-        
-        // Get dimensions
-        const [width, height, resolution] = this.dimensions || [0, 0, 0];
-        
-        // For simple terrain, direct lookup
-        if (!(this.terrainMesh instanceof THREE.Group)) {
-            const demIdx = y * width + x;
-            return this.getTerrainHeightAtIndex(demIdx);
-        }
-        
-        // For tiled terrain, we need to check the tiles
-        const terrainGroup = this.terrainMesh;
-        const demIdx = y * width + x;
-        
-        // Fallback - use raw DEM data if available
-        if (this.rawTerrainData && demIdx < this.rawTerrainData.length) {
-            return this.rawTerrainData[demIdx] || 0;
-        }
-        
-        // If we can't determine height through tiles, use 0
-        return 0;
-    }
-    
-    // Helper method to get terrain height at a specific index
-    getTerrainHeightAtIndex(index) {
-        // Fallback to raw terrain data if available
-        if (this.rawTerrainData && index < this.rawTerrainData.length) {
-            return this.rawTerrainData[index] || 0;
-        }
-        return 0;
-    }
-    
-    // This method is now empty - no pulse animations
-    setupStreamPulses() {
-        // Disabled - no animations
-        console.log("Pulse animations disabled");
-    }
-    
-    // Toggle flow animation visibility - simplified to just show/hide stream lines
-    toggleFlowAnimation(visible) {
-        if (this.streamLines) {
-            this.streamLines.visible = visible;
-        }
-        
-        // Clean up any existing timers just to be safe
-        if (this.pulseAnimations) {
-            for (const timer of this.pulseAnimations) {
-                clearInterval(timer);
-            }
-            this.pulseAnimations = [];
-        }
-    }
-    
-    // Toggle water visibility (keeping for backward compatibility)
-    toggleWaterVisibility(visible) {
-        this.showWater = visible;
-        if (this.particleSystem) {
-            this.particleSystem.visible = visible;
-        }
-    }
-    
-    // Set flow speed
-    setFlowSpeed(speed) {
-        this.flowSpeed = speed;
-    }
-    
-    // Set particle density
-    setParticleDensity(density) {
-        this.particleDensity = density;
-        // Recreate particle system if it already exists
-        if (this.particleSystem && this.isAnimating) {
-            this.createParticleSystem();
-        }
-    }
-    
-    // Find max value in array without using spread operator
-    findMaxValue(array) {
-        if (!array || array.length === 0) return 0.1;
-        
-        let max = 0.1; // Start with small positive value to avoid division by zero
-        const len = array.length;
-        
-        // Process in chunks to avoid call stack issues
-        const chunkSize = 10000;
-        
-        for (let i = 0; i < len; i += chunkSize) {
-            const endIdx = Math.min(i + chunkSize, len);
-            
-            // Find max in this chunk
-            for (let j = i; j < endIdx; j++) {
-                const val = array[j];
-                if (!isNaN(val) && isFinite(val) && val > max) {
-                    max = val;
-                }
-            }
-        }
-        
-        return max;
-    }
-    
-    createParticleSystem() {
-        if (!this.dimensions || !this.flowData) return;
-        
-        // Clean up existing particle system
-        if (this.particleSystem) {
-            this.scene.remove(this.particleSystem);
-            this.particleSystem = null;
-        }
-        
-        try {
-            const [width, height, resolution] = this.dimensions;
-            const scaleDown = this.terrainScale || 1.0;
-            const heightScale = this.heightScale || 2.0 * scaleDown; // Match the terrain height exaggeration
-            
-            // Number of particles - reduce for performance
-            const maxParticles = 10000; // Lower max particles
-            const particleCount = Math.min(this.particleDensity || 5000, maxParticles);
-            
-            // Create array of particle positions, colors, and sizes
-            const positions = new Float32Array(particleCount * 3);
-            const colors = new Float32Array(particleCount * 3);
-            const sizes = new Float32Array(particleCount);
-            
-            // Pre-calculate maximum flow value safely without spread operator
-            const maxFlow = this.findMaxValue(this.flowData);
-            console.log(`Maximum flow value: ${maxFlow}`);
-            
-            // Initialize particles with error handling
-            for (let i = 0; i < particleCount; i++) {
-                try {
-                    // Initialize particle at a random position
-                    this.initializeParticle(i, positions, colors, sizes, width, height, resolution, maxFlow);
-                } catch (particleError) {
-                    console.warn(`Error initializing particle ${i}:`, particleError);
-                    
-                    // Set safe defaults for this particle
-                    const i3 = i * 3;
-                    positions[i3] = 0;
-                    positions[i3 + 1] = 0; 
-                    positions[i3 + 2] = 0;
-                    colors[i3] = 0.3;
-                    colors[i3 + 1] = 0.7;
-                    colors[i3 + 2] = 1.0;
-                    sizes[i] = 2.0;
-                }
-            }
-            
-            // Create life cycles
-            this.particleLifecycles = new Float32Array(particleCount);
-            for (let i = 0; i < particleCount; i++) {
-                this.particleLifecycles[i] = Math.random() * this.particleLifetime;
-            }
-            
-            // Create particle geometry
-            const geometry = new THREE.BufferGeometry();
-            geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-            geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-            geometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
-            
-            // Create a simple circle texture for particles instead of loading an external image
-            const canvas = document.createElement('canvas');
-            canvas.width = 32;
-            canvas.height = 32;
-            const ctx = canvas.getContext('2d');
-            
-            // Create a radial gradient for a more water-like appearance
-            const gradient = ctx.createRadialGradient(16, 16, 0, 16, 16, 16);
-            gradient.addColorStop(0, 'rgba(50, 150, 255, 1.0)'); // Bright blue center
-            gradient.addColorStop(0.5, 'rgba(30, 100, 255, 0.8)'); // Mid blue
-            gradient.addColorStop(1, 'rgba(0, 50, 255, 0)'); // Transparent edges
-            
-            ctx.beginPath();
-            ctx.arc(16, 16, 16, 0, Math.PI * 2);
-            ctx.fillStyle = gradient;
-            ctx.fill();
-            
-            const texture = new THREE.CanvasTexture(canvas);
-            
-            // Create material for particles
-            const material = new THREE.PointsMaterial({
-                size: 6, // Slightly larger particles for better visibility
-                map: texture,
-                blending: THREE.AdditiveBlending,
-                depthTest: true,
-                transparent: true,
-                vertexColors: true
-            });
-            
-            // Create the particle system
-            this.particleSystem = new THREE.Points(geometry, material);
-            this.particleSystem.frustumCulled = false; // Disable frustum culling for better performance
-            
-            // Add to scene
-            this.scene.add(this.particleSystem);
-            
-            // Start animation
-            this.isAnimating = true;
-            
-            // Store max flow for later use
-            this.maxFlowValue = maxFlow;
-            
-            console.log(`Created particle system with ${particleCount} particles`);
-        } catch (error) {
-            console.error("Error creating particle system:", error, error.stack);
-            // Don't try to create a minimal particle system - just disable water
-            this.isAnimating = false;
-            console.log("Disabled water animation due to errors");
-        }
-    }
-    
-    // Initialize a single particle at a random position
-    initializeParticle(index, positions, colors, sizes, width, height, resolution, maxFlow) {
-        const scaleDown = this.terrainScale || 1.0;
-        const i3 = index * 3;
-        
-        let x, y;
-        let flow = 0;
-        let attempts = 0;
-        const maxAttempts = 5; // Try a few times to find a good flow spot
-        
-        // Try to find a spot with good flow
-        do {
-            // Prefer spawning at stream spawn points with very high probability
-            if (this.spawnPoints && this.spawnPoints.length > 0 && Math.random() < 0.9) {
-                // Pick a random spawn point
-                const spawnPoint = this.spawnPoints[Math.floor(Math.random() * this.spawnPoints.length)];
-                x = spawnPoint.x;
-                y = spawnPoint.y;
-            } else {
-                // Random position across the entire terrain
-                x = Math.floor(Math.random() * width);
-                y = Math.floor(Math.random() * height);
-            }
-            
-            // Get flow at this position
-            const flowIndex = y * width + x;
-            if (flowIndex >= 0 && flowIndex < this.flowData.length) {
-                flow = this.flowData[flowIndex];
-            }
-            
-            attempts++;
-        } while (flow < maxFlow * 0.01 && attempts < maxAttempts);
-        
-        // Convert to world coordinates centered on the terrain
-        const worldX = (x / width) * width * resolution * scaleDown - (width * resolution * scaleDown / 2);
-        const worldZ = (y / height) * height * resolution * scaleDown - (height * resolution * scaleDown / 2);
-        
-        // Set a default height above terrain
-        let worldY = 5.0;
-        
-        // If we have terrain, get the actual height at this position
-        if (this.terrainMesh && this.terrainMetadata) {
-            try {
-                const skipFactor = this.terrainMetadata.skipFactor || 1;
-                const meshX = Math.floor(x / skipFactor);
-                const meshY = Math.floor(y / skipFactor);
-                const meshWidth = this.terrainMetadata.meshWidth;
-                
-                if (meshX >= 0 && meshX < this.terrainMetadata.meshWidth && 
-                    meshY >= 0 && meshY < this.terrainMetadata.meshHeight) {
-                    const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                    
-                    if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                        worldY = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 4.0;
-                    }
-                }
-            } catch (error) {
-                // Just use default height
-            }
-        }
-        
-        // Set position
-        positions[i3] = worldX;
-        positions[i3 + 1] = worldY;
-        positions[i3 + 2] = worldZ;
-        
-        // Set color based on flow intensity
-        const flowIntensity = Math.min(1.0, Math.log(flow + 1) / Math.log(maxFlow + 1));
-        colors[i3] = 0.2 + flowIntensity * 0.2;     // Red component
-        colors[i3 + 1] = 0.5 + flowIntensity * 0.3;  // Green component
-        colors[i3 + 2] = 0.8 + flowIntensity * 0.2;  // Blue component
-        
-        // Set size based on flow with a better scale
-        const normalizedFlow = Math.min(1.0, flow / (maxFlow * 0.05)); // More sensitivity to flow differences
-        sizes[index] = 3.0 + normalizedFlow * 6.0; // Base size 3.0, max growth to 9.0
-    }
-    
-    updateParticles() {
-        if (!this.particleSystem || !this.flowData || !this.dimensions) return;
-        
-        const [width, height, resolution] = this.dimensions;
-        const scaleDown = this.terrainScale || 1.0;
-        const skipFactor = this.terrainMetadata?.skipFactor || 1;
-        
-        // Get particle system properties
-        const positions = this.particleSystem.geometry.attributes.position.array;
-        const colors = this.particleSystem.geometry.attributes.color.array;
-        const sizes = this.particleSystem.geometry.attributes.size.array;
-        
-        // Use the stored max flow value instead of recalculating
-        const maxFlow = this.maxFlowValue || 0.1;
-        
-        const particleCount = positions.length / 3;
-        const speedMultiplier = this.flowSpeed || 1.0;
-        
-        // Update a subset of particles each frame for better performance
-        // But update more of them for smoother animation
-        const updateCount = Math.min(2000, particleCount);
-        
-        for (let i = 0; i < updateCount; i++) {
-            // Pick a random particle to update
-            const particleIndex = Math.floor(Math.random() * particleCount);
-            const i3 = particleIndex * 3;
-            
-            // Update lifecycle
-            this.particleLifecycles[particleIndex] -= 1;
-            
-            // If particle has reached end of life, respawn it
-            if (this.particleLifecycles[particleIndex] <= 0) {
-                this.initializeParticle(particleIndex, positions, colors, sizes, width, height, resolution, maxFlow);
-                this.particleLifecycles[particleIndex] = this.particleLifetime;
-                continue;
-            }
-            
-            // Get current position
-            const worldX = positions[i3];
-            const worldY = positions[i3 + 1];
-            const worldZ = positions[i3 + 2];
-            
-            // Convert to grid coordinates
-            const gridX = Math.round(((worldX / (width * resolution * scaleDown)) * width) + (width / 2));
-            const gridZ = Math.round(((worldZ / (height * resolution * scaleDown)) * height) + (height / 2));
-            
-            // Skip if out of bounds
-            if (gridX < 0 || gridX >= width || gridZ < 0 || gridZ >= height) {
-                this.initializeParticle(particleIndex, positions, colors, sizes, width, height, resolution, maxFlow);
-                this.particleLifecycles[particleIndex] = this.particleLifetime;
-                continue;
-            }
-            
-            // Get flow accumulation at this location
-            const flowIndex = gridZ * width + gridX;
-            let flow = 0;
-            if (flowIndex >= 0 && flowIndex < this.flowData.length) {
-                flow = this.flowData[flowIndex];
-            }
-            
-            // If very low flow, increase chances of respawning (helps concentrate particles on streams)
-            if (flow < maxFlow * 0.01 && Math.random() < 0.1) {
-                this.initializeParticle(particleIndex, positions, colors, sizes, width, height, resolution, maxFlow);
-                this.particleLifecycles[particleIndex] = this.particleLifetime;
-                continue;
-            }
-            
-            // Find vector to lowest neighbor for flow direction
-            let velocityX = 0;
-            let velocityZ = 0;
-            let speed = 0.2 + (flow / maxFlow) * 0.8;  // Faster in high-flow areas
-            
-            // Find lowest neighboring cell for flow direction
-            let lowestNeighborX = gridX;
-            let lowestNeighborZ = gridZ;
-            let lowestElevation = Infinity;
-            
-            // Check all 8 neighboring directions for better flow
-            const directions = [
-                {dx: 0, dz: 1},   // N
-                {dx: 1, dz: 1},   // NE
-                {dx: 1, dz: 0},   // E
-                {dx: 1, dz: -1},  // SE
-                {dx: 0, dz: -1},  // S
-                {dx: -1, dz: -1}, // SW
-                {dx: -1, dz: 0},  // W
-                {dx: -1, dz: 1},  // NW
-            ];
-            
-            // Find lowest neighbor, with slight random variation
-            for (const {dx, dz} of directions) {
-                const neighborX = gridX + dx;
-                const neighborZ = gridZ + dz;
-                
-                if (neighborX < 0 || neighborX >= width || neighborZ < 0 || neighborZ >= height) continue;
-                
-                const meshX = Math.floor(neighborX / skipFactor);
-                const meshY = Math.floor(neighborZ / skipFactor);
-                const meshWidth = this.terrainMetadata?.meshWidth || width;
-                const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                
-                if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                    // Add small random variation to prevent all particles following same exact path
-                    const elevation = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex) + 
-                                     (Math.random() * 0.5 - 0.25); // +/- 0.25 random jitter
-                    
-                    if (elevation < lowestElevation) {
-                        lowestElevation = elevation;
-                        lowestNeighborX = neighborX;
-                        lowestNeighborZ = neighborZ;
-                    }
-                }
-            }
-            
-            // Calculate movement direction with some randomness for visual variation
-            velocityX = (lowestNeighborX - gridX) + (Math.random() * 0.4 - 0.2);
-            velocityZ = (lowestNeighborZ - gridZ) + (Math.random() * 0.4 - 0.2);
-            
-            // Normalize direction vector
-            const length = Math.sqrt(velocityX * velocityX + velocityZ * velocityZ);
-            if (length > 0) {
-                velocityX /= length;
-                velocityZ /= length;
-            }
-            
-            // Move the particle - adjust speed based on flow accumulation
-            positions[i3] += velocityX * speed * speedMultiplier;
-            positions[i3 + 2] += velocityZ * speed * speedMultiplier;
-            
-            // Update height at the new position
-            const newGridX = Math.round(((positions[i3] / (width * resolution * scaleDown)) * width) + (width / 2));
-            const newGridZ = Math.round(((positions[i3 + 2] / (height * resolution * scaleDown)) * height) + (height / 2));
-            
-            if (newGridX >= 0 && newGridX < width && newGridZ >= 0 && newGridZ < height) {
-                const meshX = Math.floor(newGridX / skipFactor);
-                const meshY = Math.floor(newGridZ / skipFactor);
-                const meshWidth = this.terrainMetadata?.meshWidth || width;
-                const vertexIndex = meshY * (meshWidth + 1) + meshX;
-                
-                if (vertexIndex < this.terrainMesh.geometry.attributes.position.count) {
-                    const terrainHeight = this.terrainMesh.geometry.attributes.position.getZ(vertexIndex);
-                    positions[i3 + 1] = terrainHeight + 4.0; // Keep close to terrain for visibility
-                }
-            }
-            
-            // Adjust color based on flow intensity
-            if (flow > 0) {
-                const flowIntensity = Math.min(1.0, Math.log(flow + 1) / Math.log(maxFlow + 1));
-                colors[i3] = 0.2 + flowIntensity * 0.2; // More red in higher flow
-                colors[i3 + 1] = 0.5 + flowIntensity * 0.3; // More green in higher flow
-                colors[i3 + 2] = 0.8 + flowIntensity * 0.2; // More blue in higher flow
-            }
-        }
-        
-        // Update the geometry attributes
-        this.particleSystem.geometry.attributes.position.needsUpdate = true;
-        this.particleSystem.geometry.attributes.color.needsUpdate = true; // Update colors
-    }
-    
-    createStreamLines() {
-        if (!this.streamData || !this.dimensions) return;
-        
-        // Clean up previous lines
-        if (this.streamLines) {
-            this.scene.remove(this.streamLines);
-            this.streamLines = null;
-        }
-        
-        const [width, height, resolution] = this.dimensions;
-        const scaleDown = this.terrainScale || 1.0;
-        
-        // Create a group for all stream lines
-        this.streamLines = new THREE.Group();
-        
-        // Create line geometry for streams
-        const streamPoints = [];
-        for (let i = 0; i < this.streamData.length; i += 2) {
-            const x = this.streamData[i];
-            const y = this.streamData[i + 1];
-            
-            const position = new THREE.Vector3(
-                x * resolution * scaleDown,
-                5 * scaleDown, // Slightly above terrain
-                y * resolution * scaleDown
-            );
-            
-            streamPoints.push(position);
-        }
-        
-        // Create a line geometry
-        const geometry = new THREE.BufferGeometry().setFromPoints(streamPoints);
-        
-        // Create line material
-        const material = new THREE.LineBasicMaterial({
-            color: 0x0088ff,
-            linewidth: 2,
-        });
-        
-        // Create line mesh
-        const line = new THREE.Line(geometry, material);
-        this.streamLines.add(line);
-        
-        // Add to scene
-        this.scene.add(this.streamLines);
+        this.scene = null;
+        this.camera = null;
     }
 }

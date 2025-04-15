@@ -199,37 +199,95 @@ export class LandingScene {
     }
     
     animate() {
-        requestAnimationFrame(() => this.animate());
+        // Skip animation if we're already disposed
+        if (!this.clock || !this.scene || !this.renderer) {
+            console.log("Skipping animation - LandingScene disposed");
+            return;
+        }
+        
+        // Store animation frame ID so we can cancel it when disposed
+        this._animationFrameId = requestAnimationFrame(() => this.animate());
         
         const delta = this.clock.getDelta();
         
-        // Update controls
-        this.controls.update();
+        // Update controls if they exist
+        if (this.controls) {
+            this.controls.update();
+        }
         
-        // Render the scene
-        this.renderer.render(this.scene, this.camera);
+        // Skip rendering if renderer is missing or context lost
+        if (!this.renderer) return;
+        
+        try {
+            // Render the scene
+            this.renderer.render(this.scene, this.camera);
+        } catch (error) {
+            console.error("Error in LandingScene animation loop:", error);
+        }
     }
     
     dispose() {
         // Clean up resources when no longer needed
+        console.log("Disposing LandingScene completely");
+        
+        // Remove event listeners
         window.removeEventListener('resize', this.resize);
         
-        this.renderer.dispose();
+        // Dispose of all Three.js resources
+        this.disposeThreeJsResources();
         
-        // Dispose geometries, materials, and textures
-        this.scene.traverse(object => {
-            if (object.geometry) object.geometry.dispose();
-            
-            if (object.material) {
-                if (Array.isArray(object.material)) {
-                    for (const material of object.material) {
-                        this.disposeMaterial(material);
-                    }
-                } else {
-                    this.disposeMaterial(object.material);
+        // Explicitly release references
+        this.scene = null;
+        this.camera = null;
+        this.clock = null;
+        this.controls = null;
+    }
+    
+    disposeThreeJsResources() {
+        // Stop animation loop
+        if (this._animationFrameId) {
+            cancelAnimationFrame(this._animationFrameId);
+            this._animationFrameId = null;
+        }
+        
+        // Dispose of all scene objects
+        if (this.scene) {
+            this.scene.traverse(object => {
+                // Dispose geometries
+                if (object.geometry) {
+                    object.geometry.dispose();
                 }
+                
+                // Dispose materials
+                if (object.material) {
+                    if (Array.isArray(object.material)) {
+                        for (const material of object.material) {
+                            this.disposeMaterial(material);
+                        }
+                    } else {
+                        this.disposeMaterial(object.material);
+                    }
+                }
+            });
+        }
+        
+        // Dispose controls
+        if (this.controls) {
+            this.controls.dispose();
+        }
+        
+        // Properly dispose renderer last
+        if (this.renderer) {
+            console.log("Disposing WebGL renderer");
+            this.renderer.dispose();
+            this.renderer.forceContextLoss();
+            const gl = this.renderer.getContext();
+            if (gl) {
+                const extension = gl.getExtension('WEBGL_lose_context');
+                if (extension) extension.loseContext();
             }
-        });
+            this.renderer = null;
+        }
     }
     
     disposeMaterial(material) {

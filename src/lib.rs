@@ -271,6 +271,32 @@ impl WaterModel {
             JsValue::NULL
         }
     }
+    
+    // Get hierarchical streams for zoom-based level of detail
+    #[wasm_bindgen]
+    pub fn extract_hierarchical_streams(&self) -> JsValue {
+        console::log_1(&"extract_hierarchical_streams called".into());
+        
+        if let Some(flow_model) = &self.flow_model {
+            // Get hierarchical streams from the flow model
+            let hierarchical_streams = flow_model.extract_hierarchical_streams();
+            
+            // Log success
+            console::log_1(&format!("Generated hierarchical streams with {} levels", hierarchical_streams.len()).into());
+            
+            // Convert to JS directly without using Result
+            match serde_wasm_bindgen::to_value(&hierarchical_streams) {
+                Ok(result) => result,
+                Err(e) => {
+                    console::log_1(&format!("Error converting hierarchical streams: {:?}", e).into());
+                    JsValue::NULL
+                },
+            }
+        } else {
+            console::log_1(&"Flow model not computed".into());
+            JsValue::NULL
+        }
+    }
 
     // Simple test function with minimal name to check if it gets exported
     #[wasm_bindgen]

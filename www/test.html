@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terrain Renderer Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }
+        #canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <!-- Import Three.js from CDN -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        class SimpleTerrainRenderer {
+            constructor(canvas) {
+                console.log("Initializing minimal terrain renderer");
+                
+                // Create scene
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0x87ceeb); // Light blue sky
+                
+                // Create camera
+                this.camera = new THREE.PerspectiveCamera(
+                    45, 
+                    canvas.clientWidth / canvas.clientHeight, 
+                    0.1, 
+                    10000
+                );
+                this.camera.position.set(0, 200, 400);
+                this.camera.lookAt(0, 0, 0);
+                
+                // Create renderer
+                this.renderer = new THREE.WebGLRenderer({ 
+                    canvas: canvas,
+                    antialias: true
+                });
+                this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
+                
+                // Add orbit controls
+                this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+                this.controls.enableDamping = true;
+                this.controls.dampingFactor = 0.1;
+                
+                // Add basic lights
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+                this.scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(1, 1, 1).normalize();
+                this.scene.add(directionalLight);
+                
+                // Start animation loop
+                this.animate();
+                
+                // Handle resize
+                window.addEventListener('resize', () => this.resize());
+                
+                // Create terrain immediately with test data
+                this.createTestTerrain();
+            }
+            
+            resize() {
+                const width = this.canvas.clientWidth;
+                const height = this.canvas.clientHeight;
+                
+                this.camera.aspect = width / height;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(width, height);
+            }
+            
+            animate() {
+                requestAnimationFrame(() => this.animate());
+                
+                // Update controls
+                this.controls.update();
+                
+                // Render scene
+                this.renderer.render(this.scene, this.camera);
+            }
+            
+            createTestTerrain() {
+                console.log("Creating test terrain");
+                
+                // Create a simple procedural terrain
+                const size = 100;
+                const resolution = 1;
+                
+                // Generate heightmap data
+                const terrainData = [];
+                for (let y = 0; y < size; y++) {
+                    for (let x = 0; x < size; x++) {
+                        // Simple heightmap formula for testing
+                        const centerX = size / 2;
+                        const centerY = size / 2;
+                        const dx = x - centerX;
+                        const dy = y - centerY;
+                        const distance = Math.sqrt(dx*dx + dy*dy);
+                        
+                        // Create mountain-like terrain with some randomness
+                        const height = 50 * Math.exp(-(distance*distance) / (2 * (size/4) * (size/4))) + 
+                                      10 * Math.sin(x/5) * Math.cos(y/5) +
+                                      5 * Math.random();
+                        
+                        terrainData.push(height);
+                    }
+                }
+                
+                // Create geometry
+                const geometry = new THREE.PlaneGeometry(
+                    size * resolution, 
+                    size * resolution,
+                    size - 1, 
+                    size - 1
+                );
+                
+                // Apply heights
+                for (let i = 0; i < terrainData.length; i++) {
+                    geometry.attributes.position.setZ(i, terrainData[i]);
+                }
+                
+                // Update normals
+                geometry.attributes.position.needsUpdate = true;
+                geometry.computeVertexNormals();
+                
+                // Create material
+                const material = new THREE.MeshPhongMaterial({
+                    color: 0x75A045,
+                    shininess: 0,
+                    flatShading: false
+                });
+                
+                // Create mesh
+                const terrainMesh = new THREE.Mesh(geometry, material);
+                terrainMesh.rotation.x = -Math.PI / 2; // Rotate to horizontal
+                
+                // Add to scene
+                this.scene.add(terrainMesh);
+                
+                console.log("Test terrain created");
+            }
+        }
+
+        // Initialize when page loads
+        window.addEventListener('load', () => {
+            const canvas = document.getElementById('canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            const renderer = new SimpleTerrainRenderer(canvas);
+            console.log("Test page loaded and renderer initialized");
+        });
+    </script>
+</body>
+</html> 
