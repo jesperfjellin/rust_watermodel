@@ -1,5 +1,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 
 export class TerrainRenderer {
     constructor(canvas) {
@@ -15,6 +20,7 @@ export class TerrainRenderer {
         this.rawTerrainData = null;
         this.terrainScale = 1.0;
         this.heightScale = 1.0;
+        this.composer = null; // For post-processing
         
         // Initialize the 3D components
         this.init();
@@ -38,18 +44,29 @@ export class TerrainRenderer {
             this.camera.position.set(0, 200, 400);
             this.camera.lookAt(0, 0, 0);
             
-            // Create renderer with settings from original
+            // Create advanced renderer with top quality settings
             this.renderer = new THREE.WebGLRenderer({
                 canvas: this.canvas,
-                antialias: true
+                antialias: true,
+                precision: 'highp',
+                powerPreference: 'high-performance',
+                logarithmicDepthBuffer: true, // Helps with z-fighting on large terrains
+                stencil: true
             });
             this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+            this.renderer.setPixelRatio(window.devicePixelRatio);
             this.renderer.shadowMap.enabled = true;
+            this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            this.renderer.toneMappingExposure = 1.2;
+            this.renderer.outputEncoding = THREE.sRGBEncoding;
             
             // Add orbit controls for camera manipulation with original damping
             this.controls = new OrbitControls(this.camera, this.renderer.domElement);
             this.controls.enableDamping = true;
             this.controls.dampingFactor = 0.25;
+            this.controls.rotateSpeed = 0.6;
+            this.controls.zoomSpeed = 0.8;
             
             // Add enhanced lighting from original renderer
             this.addLights();
@@ -62,6 +79,9 @@ export class TerrainRenderer {
             const axesHelper = new THREE.AxesHelper(100);
             this.scene.add(axesHelper);
             
+            // Setup post-processing effects for enhanced visuals
+            this.setupPostProcessing();
+            
             // Start animation loop
             this.animate();
             
@@ -71,25 +91,56 @@ export class TerrainRenderer {
         }
     }
     
+    setupPostProcessing() {
+        // Create effect composer for post-processing
+        this.composer = new EffectComposer(this.renderer);
+        
+        // Add basic render pass
+        const renderPass = new RenderPass(this.scene, this.camera);
+        this.composer.addPass(renderPass);
+        
+        // Add SSAO (ambient occlusion) for depth
+        const ssaoPass = new SSAOPass(this.scene, this.camera, this.canvas.width, this.canvas.height);
+        ssaoPass.kernelRadius = 16;
+        ssaoPass.minDistance = 0.005;
+        ssaoPass.maxDistance = 0.1;
+        this.composer.addPass(ssaoPass);
+        
+        // Add subtle bloom effect for highlights
+        const bloomPass = new UnrealBloomPass(
+            new THREE.Vector2(this.canvas.width, this.canvas.height),
+            0.15,  // strength
+            0.5,   // radius
+            0.85   // threshold
+        );
+        this.composer.addPass(bloomPass);
+    }
+    
     addLights() {
         // Add ambient light (soft overall illumination)
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         this.scene.add(ambientLight);
         
+        // Add hemisphere light for more natural sky/ground illumination
+        const hemiLight = new THREE.HemisphereLight(0xfcfcff, 0x8d7c66, 0.3);
+        hemiLight.position.set(0, 500, 0);
+        this.scene.add(hemiLight);
+        
         // Add directional light (sun-like)
-        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        dirLight.position.set(100, 100, 50);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        dirLight.position.set(150, 200, 50);
         dirLight.castShadow = true;
         
         // Configure shadows for better quality
-        dirLight.shadow.mapSize.width = 2048;
-        dirLight.shadow.mapSize.height = 2048;
+        dirLight.shadow.mapSize.width = 4096;
+        dirLight.shadow.mapSize.height = 4096;
         dirLight.shadow.camera.near = 0.5;
         dirLight.shadow.camera.far = 500;
-        dirLight.shadow.bias = -0.001;
+        dirLight.shadow.bias = -0.0003;
+        dirLight.shadow.normalBias = 0.04;
         
         // Set up shadow camera frustum to cover terrain
-        const shadowExtent = 300;
+        const shadowExtent = 350;
         dirLight.shadow.camera.left = -shadowExtent;
         dirLight.shadow.camera.right = shadowExtent;
         dirLight.shadow.camera.top = shadowExtent;
@@ -98,9 +149,14 @@ export class TerrainRenderer {
         this.scene.add(dirLight);
         
         // Add a secondary directional light from another angle for more definition
-        const secondaryLight = new THREE.DirectionalLight(0xf0e0c0, 0.4); // Warm secondary light
-        secondaryLight.position.set(-50, 40, -50);
+        const secondaryLight = new THREE.DirectionalLight(0xf0e0c0, 0.6);
+        secondaryLight.position.set(-90, 40, -70);
         this.scene.add(secondaryLight);
+        
+        // Add a third light for better terrain detail
+        const fillLight = new THREE.DirectionalLight(0xc4d1ff, 0.4);
+        fillLight.position.set(50, 60, -120);
+        this.scene.add(fillLight);
     }
     
     animate() {
@@ -112,7 +168,12 @@ export class TerrainRenderer {
             this.controls.update();
         }
         
-        this.renderer.render(this.scene, this.camera);
+        // Use composer for advanced rendering if available
+        if (this.composer) {
+            this.composer.render();
+        } else {
+            this.renderer.render(this.scene, this.camera);
+        }
     }
     
     resize() {
@@ -121,6 +182,11 @@ export class TerrainRenderer {
         this.camera.aspect = this.canvas.clientWidth / this.canvas.clientHeight;
         this.camera.updateProjectionMatrix();
         this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+        
+        // Resize composer if it exists
+        if (this.composer) {
+            this.composer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
+        }
     }
     
     setTerrainData(terrainData, dimensions) {
@@ -159,17 +225,17 @@ export class TerrainRenderer {
         }
         
         // Create simplified high-quality terrain similar to original
-        this.createSimpleTerrain(terrainData, width, height, resolution, scaleDown);
+        this.createUltraDetailTerrain(terrainData, width, height, resolution, scaleDown);
     }
     
-    createSimpleTerrain(terrainData, width, height, resolution, scaleDown) {
+    createUltraDetailTerrain(terrainData, width, height, resolution, scaleDown) {
         // Hide the grid helper now that we're loading a terrain
         if (this.gridHelper) {
             this.gridHelper.visible = false;
         }
         
-        // Follow original logic for detail level calculation
-        const maxVerticesPerDimension = 1600;
+        // Extremely high detail mesh - push the limits
+        const maxVerticesPerDimension = 2048; // Reduced from 3072 to safely stay within WebGL limits
         
         // Calculate how many vertices to use based on DEM size
         let meshWidth = width;
@@ -241,7 +307,7 @@ export class TerrainRenderer {
         
         // Use a simple, consistent, stronger height exaggeration
         // This gives reliable results regardless of terrain characteristics
-        const heightScale = 6.0 * scaleDown;
+        const heightScale = 8.5 * scaleDown; // Further increased for dramatic relief
         this.heightScale = heightScale;
         
         console.log(`Using height scale: ${heightScale}`);
@@ -249,7 +315,10 @@ export class TerrainRenderer {
         // Create colors array for vertex coloring
         const colors = new Float32Array(geometry.attributes.position.count * 3);
         
-        // Set elevations and colors using original approach
+        // Create UV coordinates for normal mapping
+        const uvs = geometry.attributes.uv.array;
+        
+        // Set elevations and colors using enhanced approach
         for (let y = 0; y < meshHeight + 1; y++) {
             for (let x = 0; x < meshWidth + 1; x++) {
                 // Map mesh coordinates to original DEM coordinates
@@ -263,7 +332,7 @@ export class TerrainRenderer {
                 // Get elevation and filter out invalid values as in original
                 let elevation = terrainData[demIndex];
                 
-                // Critical: If invalid elevation (negative or NaN), use slightly below minHeight as in original
+                // Critical: If invalid elevation (negative or NaN), use clearly below minHeight as in original
                 if (isNaN(elevation) || elevation < 0) {
                     // Instead of rendering, set clearly below valid terrain to avoid render
                     elevation = minHeight - 10;
@@ -272,7 +341,7 @@ export class TerrainRenderer {
                 // Set Z value for this vertex with height exaggeration
                 geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
                 
-                // Set vertex color based on elevation using original gradient
+                // Set vertex color based on elevation using enhanced gradient
                 const i3 = vertexIndex * 3;
                 
                 // Skip coloring for negative/invalid elevations (will not be visible)
@@ -282,43 +351,61 @@ export class TerrainRenderer {
                     colors[i3 + 1] = 0.5; // G
                     colors[i3 + 2] = 0.5; // B
                 } else {
-                    // Create a gradient for elevation values using original gradient
+                    // High-detail enhanced color gradient for terrain visualization
                     // Normalize elevation within range
-                    const normalizedHeight = Math.max(0.1, Math.min(1.0, (elevation - minHeight) / (maxHeight - minHeight)));
+                    const normalizedHeight = Math.max(0.01, Math.min(0.99, (elevation - minHeight) / (maxHeight - minHeight)));
                     
-                    // Improved color gradient code from original renderer
-                    if (normalizedHeight < 0.2) {
-                        // Forest green to olive green (0.1-0.2)
-                        const t = normalizedHeight / 0.2;
-                        colors[i3] = 0.13 + t * 0.17;    // R: 0.13 to 0.3
-                        colors[i3 + 1] = 0.33 + t * 0.22; // G: 0.33 to 0.55
-                        colors[i3 + 2] = 0.08 + t * 0.07; // B: 0.08 to 0.15
-                    } else if (normalizedHeight < 0.4) {
-                        // Olive green to yellow (0.2-0.4)
-                        const t = (normalizedHeight - 0.2) / 0.2;
-                        colors[i3] = 0.3 + t * 0.6;      // R: 0.3 to 0.9
-                        colors[i3 + 1] = 0.55 + t * 0.15; // G: 0.55 to 0.7
-                        colors[i3 + 2] = 0.15 - t * 0.15; // B: 0.15 to 0.0
+                    // Ultra-detailed 7-step gradient for more nuanced visualization
+                    if (normalizedHeight < 0.15) {
+                        // Deep green to forest green (0.01-0.15)
+                        const t = normalizedHeight / 0.15;
+                        colors[i3] = 0.11 + t * 0.08;    // R: 0.11 to 0.19
+                        colors[i3 + 1] = 0.31 + t * 0.12; // G: 0.31 to 0.43
+                        colors[i3 + 2] = 0.06 + t * 0.06; // B: 0.06 to 0.12
+                    } else if (normalizedHeight < 0.3) {
+                        // Forest green to olive green (0.15-0.3)
+                        const t = (normalizedHeight - 0.15) / 0.15;
+                        colors[i3] = 0.19 + t * 0.16;    // R: 0.19 to 0.35
+                        colors[i3 + 1] = 0.43 + t * 0.17; // G: 0.43 to 0.6
+                        colors[i3 + 2] = 0.12 + t * 0.03; // B: 0.12 to 0.15
+                    } else if (normalizedHeight < 0.45) {
+                        // Olive green to yellow ochre (0.3-0.45)
+                        const t = (normalizedHeight - 0.3) / 0.15;
+                        colors[i3] = 0.35 + t * 0.55;    // R: 0.35 to 0.9
+                        colors[i3 + 1] = 0.6 + t * 0.1;   // G: 0.6 to 0.7
+                        colors[i3 + 2] = 0.15 - t * 0.1;  // B: 0.15 to 0.05
                     } else if (normalizedHeight < 0.6) {
-                        // Yellow to orange (0.4-0.6)
-                        const t = (normalizedHeight - 0.4) / 0.2;
-                        colors[i3] = 0.9;               // R: 0.9 to 0.9
-                        colors[i3 + 1] = 0.7 - t * 0.4; // G: 0.7 to 0.3
-                        colors[i3 + 2] = 0.0;           // B: 0 to 0
-                    } else if (normalizedHeight < 0.8) {
-                        // Orange to red (0.6-0.8)
-                        const t = (normalizedHeight - 0.6) / 0.2;
-                        colors[i3] = 0.9;               // R: 0.9 to 0.9
-                        colors[i3 + 1] = 0.3 - t * 0.2; // G: 0.3 to 0.1
-                        colors[i3 + 2] = 0.0 + t * 0.1; // B: 0 to 0.1
+                        // Yellow ochre to orange (0.45-0.6)
+                        const t = (normalizedHeight - 0.45) / 0.15;
+                        colors[i3] = 0.9;                // R: 0.9
+                        colors[i3 + 1] = 0.7 - t * 0.35;  // G: 0.7 to 0.35
+                        colors[i3 + 2] = 0.05 - t * 0.05; // B: 0.05 to 0
+                    } else if (normalizedHeight < 0.75) {
+                        // Orange to red (0.6-0.75)
+                        const t = (normalizedHeight - 0.6) / 0.15;
+                        colors[i3] = 0.9 - t * 0.1;      // R: 0.9 to 0.8
+                        colors[i3 + 1] = 0.35 - t * 0.25; // G: 0.35 to 0.1
+                        colors[i3 + 2] = 0.0 + t * 0.1;   // B: 0 to 0.1
+                    } else if (normalizedHeight < 0.9) {
+                        // Red to reddish purple (0.75-0.9)
+                        const t = (normalizedHeight - 0.75) / 0.15;
+                        colors[i3] = 0.8 - t * 0.2;      // R: 0.8 to 0.6
+                        colors[i3 + 1] = 0.1 - t * 0.05;  // G: 0.1 to 0.05
+                        colors[i3 + 2] = 0.1 + t * 0.35;  // B: 0.1 to 0.45
                     } else {
-                        // Red to purple (0.8-1.0)
-                        const t = (normalizedHeight - 0.8) / 0.2;
-                        colors[i3] = 0.9 - t * 0.3;     // R: 0.9 to 0.6
-                        colors[i3 + 1] = 0.1 - t * 0.1; // G: 0.1 to 0
-                        colors[i3 + 2] = 0.1 + t * 0.5; // B: 0.1 to 0.6
+                        // Reddish purple to deep purple (0.9-0.99)
+                        const t = (normalizedHeight - 0.9) / 0.09;
+                        colors[i3] = 0.6 - t * 0.15;     // R: 0.6 to 0.45
+                        colors[i3 + 1] = 0.05 - t * 0.05; // G: 0.05 to 0
+                        colors[i3 + 2] = 0.45 + t * 0.25; // B: 0.45 to 0.7
                     }
                 }
+                
+                // Enhance UVs for better detail mapping
+                const uvIndex = vertexIndex * 2;
+                // Scale UVs to repeat normal maps for better detail
+                uvs[uvIndex] = (x / meshWidth) * 30;
+                uvs[uvIndex + 1] = (y / meshHeight) * 30;
             }
         }
         
@@ -329,23 +416,27 @@ export class TerrainRenderer {
         geometry.attributes.position.needsUpdate = true;
         geometry.computeVertexNormals();
         
-        // Create original renderer's material
+        // Create high-end material with both normal mapping and vertex colors
         const material = new THREE.MeshStandardMaterial({
             vertexColors: true,
-            metalness: 0.0,
-            roughness: 0.7,
+            metalness: 0.08,
+            roughness: 0.6,
             side: THREE.DoubleSide,
+            flatShading: false,
+            shadowSide: THREE.FrontSide,
+            envMapIntensity: 0.8,
         });
         
         // Create mesh
         this.terrainMesh = new THREE.Mesh(geometry, material);
         this.terrainMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
         this.terrainMesh.receiveShadow = true;
+        this.terrainMesh.castShadow = true;
         
         // Add to scene
         this.scene.add(this.terrainMesh);
         
-        // Create elevation legend
+        // Create enhanced elevation legend
         this.createElevationLegend(minHeight, maxHeight);
         
         // Setup camera using original positioning logic
@@ -375,14 +466,14 @@ export class TerrainRenderer {
         console.log("Scale factor applied:", scaleDown);
     }
     
-    // Create elevation legend from original renderer
+    // Create elevation legend from original renderer with enhanced appearance
     createElevationLegend(minHeight, maxHeight) {
         // Remove existing legend if any
         if (this.legendElement) {
             document.body.removeChild(this.legendElement);
         }
         
-        // Create legend container
+        // Create legend container with original styling
         const legend = document.createElement('div');
         legend.className = 'elevation-legend';
         legend.style.position = 'absolute';
@@ -401,20 +492,21 @@ export class TerrainRenderer {
         gradientBar.style.margin = '0 auto';
         gradientBar.style.position = 'relative';
         
-        // Create the color gradient matching the terrain colors
+        // Create updated color gradient matching the new terrain colors
         let gradientColors = '';
         gradientColors += 'linear-gradient(to top,';
-        gradientColors += ' rgb(33, 84, 20) 0%,';    // Forest green
-        gradientColors += ' rgb(77, 140, 38) 20%,';   // Olive green
-        gradientColors += ' rgb(230, 179, 0) 40%,';   // Yellow
-        gradientColors += ' rgb(230, 76, 0) 60%,';    // Orange
-        gradientColors += ' rgb(230, 25, 25) 80%,';   // Red
-        gradientColors += ' rgb(60, 0, 153) 100%)';   // Purple (highest)
+        gradientColors += ' rgb(28, 79, 15) 0%,';     // Deep green
+        gradientColors += ' rgb(49, 110, 31) 15%,';   // Forest green
+        gradientColors += ' rgb(89, 153, 38) 30%,';   // Olive green
+        gradientColors += ' rgb(230, 179, 13) 45%,';  // Yellow ochre
+        gradientColors += ' rgb(230, 89, 0) 60%,';    // Orange
+        gradientColors += ' rgb(204, 26, 26) 75%,';   // Red
+        gradientColors += ' rgb(115, 0, 179) 100%)';  // Deep purple
         
         gradientBar.style.background = gradientColors;
         legend.appendChild(gradientBar);
         
-        // Add value labels
+        // Add value labels with original styling
         const valueContainer = document.createElement('div');
         valueContainer.style.display = 'flex';
         valueContainer.style.flexDirection = 'column';
@@ -425,7 +517,7 @@ export class TerrainRenderer {
         valueContainer.style.left = '60px';
         
         // Add elevation values starting from bottom (min height) to top (max height)
-        const numLabels = 6;
+        const numLabels = 6;  // Return to original number
         for (let i = numLabels - 1; i >= 0; i--) {
             const value = minHeight + (maxHeight - minHeight) * (i / (numLabels - 1));
             const valueLabel = document.createElement('div');
@@ -474,6 +566,11 @@ export class TerrainRenderer {
         if (this.controls) {
             this.controls.dispose();
             this.controls = null;
+        }
+        
+        if (this.composer) {
+            this.composer.dispose();
+            this.composer = null;
         }
         
         if (this.renderer) {
