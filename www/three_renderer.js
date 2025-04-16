@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FlyControls } from 'three/addons/controls/FlyControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
@@ -14,6 +15,8 @@ export class TerrainRenderer {
         this.camera = null;
         this.renderer = null;
         this.controls = null;
+        this.flyControls = null; // Add FlyControls reference
+        this.controlsType = 'orbit'; // Default to orbit controls
         this.terrainMesh = null;
         this.gridHelper = null;
         this.legendElement = null;
@@ -67,6 +70,17 @@ export class TerrainRenderer {
             this.controls.dampingFactor = 0.25;
             this.controls.rotateSpeed = 0.6;
             this.controls.zoomSpeed = 0.8;
+            
+            // Setup FlyControls but don't enable yet
+            this.flyControls = new FlyControls(this.camera, this.renderer.domElement);
+            this.flyControls.movementSpeed = 5000;
+            this.flyControls.rollSpeed = 0.5;
+            this.flyControls.dragToLook = true;
+            this.flyControls.autoForward = false;
+            this.flyControls.enabled = false; // Disabled by default
+            
+            // Add button to toggle between control modes
+            this.addControlsToggleButton();
             
             // Add enhanced lighting from original renderer
             this.addLights();
@@ -164,8 +178,17 @@ export class TerrainRenderer {
         
         requestAnimationFrame(() => this.animate());
         
-        if (this.controls) {
+        // Calculate proper delta time for smooth movement
+        const now = performance.now();
+        if (!this.lastTime) this.lastTime = now;
+        const delta = (now - this.lastTime) / 1000; // Convert to seconds
+        this.lastTime = now;
+        
+        // Update the appropriate controls
+        if (this.controlsType === 'orbit' && this.controls) {
             this.controls.update();
+        } else if (this.controlsType === 'fly' && this.flyControls) {
+            this.flyControls.update(delta); // Use actual delta time instead of fixed value
         }
         
         // Use composer for advanced rendering if available
@@ -542,6 +565,44 @@ export class TerrainRenderer {
         this.legendElement = legend;
     }
     
+    // Add a button to switch between orbit and fly controls
+    addControlsToggleButton() {
+        const button = document.createElement('button');
+        button.textContent = 'Toggle Flight Mode';
+        button.style.position = 'absolute';
+        button.style.top = '10px';
+        button.style.right = '10px';
+        button.style.zIndex = '1000';
+        button.style.padding = '8px 12px';
+        button.style.backgroundColor = '#444';
+        button.style.color = 'white';
+        button.style.border = 'none';
+        button.style.borderRadius = '4px';
+        button.style.cursor = 'pointer';
+        
+        button.addEventListener('click', () => this.toggleControlsMode());
+        
+        document.body.appendChild(button);
+        this.controlsButton = button;
+    }
+    
+    // Toggle between orbit and fly controls
+    toggleControlsMode() {
+        if (this.controlsType === 'orbit') {
+            // Switch to fly controls
+            this.controlsType = 'fly';
+            this.controls.enabled = false;
+            this.flyControls.enabled = true;
+            this.controlsButton.textContent = 'Switch to Orbit Mode';
+        } else {
+            // Switch to orbit controls
+            this.controlsType = 'orbit';
+            this.flyControls.enabled = false;
+            this.controls.enabled = true;
+            this.controlsButton.textContent = 'Switch to Flight Mode';
+        }
+    }
+    
     // Stub methods to maintain compatibility with existing code
     setWaterVisualizationData() {}
     setStreamSpawnPoints() {}
@@ -563,9 +624,19 @@ export class TerrainRenderer {
             this.terrainMesh = null;
         }
         
+        if (this.controlsButton) {
+            document.body.removeChild(this.controlsButton);
+            this.controlsButton = null;
+        }
+        
         if (this.controls) {
             this.controls.dispose();
             this.controls = null;
+        }
+        
+        if (this.flyControls) {
+            this.flyControls.dispose();
+            this.flyControls = null;
         }
         
         if (this.composer) {
