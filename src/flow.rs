@@ -663,7 +663,10 @@ impl FlowModel {
             batch_start = batch_end;
         }
         
+        #[cfg(target_arch = "wasm32")]
         web_sys::console::log_1(&format!("Generated {} high-quality stream polylines", polylines.len()).into());
+        #[cfg(not(target_arch = "wasm32"))]
+        println!("Generated {} high-quality stream polylines", polylines.len());
         polylines
     }
     
@@ -708,14 +711,21 @@ impl FlowModel {
                 polylines.truncate(max_streams);
             }
             
+            #[cfg(target_arch = "wasm32")]
             web_sys::console::log_1(&format!("Level with threshold {}: kept {} streams (limited from original)", 
                 threshold, polylines.len()).into());
+            #[cfg(not(target_arch = "wasm32"))]
+            println!("Level with threshold {}: kept {} streams (limited from original)", 
+                threshold, polylines.len());
             
             // Store the polylines with their importance level (threshold)
             hierarchical_streams.push((polylines, threshold));
         }
         
+        #[cfg(target_arch = "wasm32")]
         web_sys::console::log_1(&format!("Generated hierarchical streams with {} levels", hierarchical_streams.len()).into());
+        #[cfg(not(target_arch = "wasm32"))]
+        println!("Generated hierarchical streams with {} levels", hierarchical_streams.len());
         hierarchical_streams
     }
 

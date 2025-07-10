@@ -117,16 +117,15 @@ async function loadCatchment(catchmentId) {
         status.style.opacity = '1';
         
         // Load the pre-computed data
-        const response = await fetch(`./precomputed/${catchmentId}.bin`);
+        const response = await fetch(`./precomputed/${catchmentId}.json`);
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
         
-        const arrayBuffer = await response.arrayBuffer();
+        const jsonText = await response.text();
         
-        // For now, we'll need to implement the binary format loading
-        // This is a placeholder - you'll need to implement the actual binary deserialization
-        const catchmentData = await deserializeCatchmentData(arrayBuffer);
+        // Parse the JSON data
+        const catchmentData = JSON.parse(jsonText);
         
         // Render the catchment
         renderCatchment(catchmentData);
@@ -147,55 +146,7 @@ async function loadCatchment(catchmentId) {
     }
 }
 
-// Deserialize catchment data from binary format
-async function deserializeCatchmentData(arrayBuffer) {
-    // This is a placeholder - you'll need to implement the actual binary deserialization
-    // For now, we'll create a mock structure
-    
-    // In a real implementation, you would:
-    // 1. Use a binary deserialization library (like bincode-js)
-    // 2. Deserialize the PrecomputedCatchment struct
-    // 3. Return the structured data
-    
-    console.log('Deserializing catchment data...', arrayBuffer.byteLength);
-    
-    // Mock data structure for now
-    return {
-        id: 'mock_catchment',
-        metadata: {
-            width: 1000,
-            height: 1000,
-            resolution: 10.0,
-            bounds: [0, 0, 10000, 10000],
-            elevation_range: [0, 1000],
-            processing_timestamp: new Date().toISOString()
-        },
-        terrain: {
-            elevation_data: new Array(1000000).fill(0).map(() => Math.random() * 1000),
-            mesh_width: 1000,
-            mesh_height: 1000,
-            skip_factor: 1,
-            color_data: new Array(3000000).fill(0.5)
-        },
-        flow: {
-            flow_directions: new Array(1000000).fill(1),
-            flow_accumulation: new Array(1000000).fill(1),
-            slopes: new Array(1000000).fill(0.1),
-            outlets: [[500, 500, 1000]]
-        },
-        streams: {
-            detailed: [],
-            medium: [],
-            major: []
-        },
-        water_viz: {
-            flow_accumulation: new Array(1000000).fill(1),
-            slopes: new Array(1000000).fill(0.1),
-            velocities: new Array(2000000).fill(0),
-            spawn_points: [[100, 100], [200, 200]]
-        }
-    };
-}
+// No longer needed - we now parse JSON directly in loadCatchment()
 
 // Render the catchment data
 function renderCatchment(catchmentData) {

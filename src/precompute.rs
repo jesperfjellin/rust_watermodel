@@ -155,7 +155,8 @@ impl PrecomputedCatchment {
     
     /// Save the pre-computed data to a file
     pub fn save_to_file(&self, output_path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        let data = bincode::serialize(self)?;
+        // Use JSON instead of bincode for easier JavaScript consumption
+        let data = serde_json::to_string_pretty(self)?;
         fs::write(output_path, data)?;
         println!("Saved pre-computed data to {}", output_path.display());
         Ok(())
@@ -163,8 +164,8 @@ impl PrecomputedCatchment {
     
     /// Load pre-computed data from a file
     pub fn load_from_file(file_path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
-        let data = fs::read(file_path)?;
-        let catchment: PrecomputedCatchment = bincode::deserialize(&data)?;
+        let data = fs::read_to_string(file_path)?;
+        let catchment: PrecomputedCatchment = serde_json::from_str(&data)?;
         Ok(catchment)
     }
     
@@ -277,7 +278,7 @@ pub fn process_all_catchments(input_dir: &Path, output_dir: &Path) -> Result<(),
         let catchment = PrecomputedCatchment::from_dem_file(dem_path, &catchment_id)?;
         
         // Save to file
-        let output_path = output_dir.join(format!("{}.bin", catchment_id));
+        let output_path = output_dir.join(format!("{}.json", catchment_id));
         catchment.save_to_file(&output_path)?;
     }
     
@@ -292,12 +293,12 @@ pub fn process_all_catchments(input_dir: &Path, output_dir: &Path) -> Result<(),
 fn create_catchment_index(output_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut index = HashMap::new();
     
-    // Read all .bin files and extract metadata
+    // Read all .json files and extract metadata
     for entry in fs::read_dir(output_dir)? {
         let entry = entry?;
         let path = entry.path();
         
-        if path.extension().and_then(|s| s.to_str()) == Some("bin") {
+        if path.extension().and_then(|s| s.to_str()) == Some("json") {
             if let Ok(catchment) = PrecomputedCatchment::load_from_file(&path) {
                 index.insert(catchment.id.clone(), catchment.metadata);
             }

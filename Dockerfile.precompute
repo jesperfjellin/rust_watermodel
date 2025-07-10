@@ -28,12 +28,12 @@ COPY src ./src
 # Build the pre-computation tool
 RUN cargo build --release --bin precompute --features "native"
 
-# Runtime image
-FROM debian:bullseye-slim
+# Runtime image - use same Debian version as rust:latest (bookworm)
+FROM debian:bookworm-slim
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y \
-    libgdal28 \
+    libgdal-dev \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 

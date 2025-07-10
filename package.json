@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "wasm-pack build --target web",
-    "prestart": "mkdir -p www/pkg && cp -r pkg/* www/pkg/",
-    "start": "npx serve www"
+    "start": "npx serve www",
+    "start:precomputed": "npx serve www"
   },
   "devDependencies": {
     "serve": "^14.0.1"

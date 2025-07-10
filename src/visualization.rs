@@ -336,23 +336,35 @@ pub fn smooth_stream_polylines(polylines: &mut Vec<Vec<(usize, usize)>>, iterati
 /// Generate a higher quality stream network with less downsampling
 pub fn generate_high_quality_streams(flow_model: &FlowModel, threshold_percentile: f32) -> Vec<Vec<(usize, usize)>> {
     // Add logging here
+    #[cfg(target_arch = "wasm32")]
     web_sys::console::log_1(&format!("Generating high-quality streams with percentile: {}", threshold_percentile).into());
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("Generating high-quality streams with percentile: {}", threshold_percentile);
 
     // Calculate max flow accumulation for logging purposes
     let max_flow = flow_model.flow_accumulation.iter()
         .fold(0.0_f32, |max_val, &val| max_val.max(val));
+    #[cfg(target_arch = "wasm32")]
     web_sys::console::log_1(&format!("Max flow accumulation: {}", max_flow).into());
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("Max flow accumulation: {}", max_flow);
     
     // Calculate the actual threshold value
     let actual_threshold = max_flow * threshold_percentile;
-     web_sys::console::log_1(&format!("Actual threshold value: {}", actual_threshold).into());
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&format!("Actual threshold value: {}", actual_threshold).into());
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("Actual threshold value: {}", actual_threshold);
 
 
     // Extract high-quality streams using the dedicated method
     let polylines = flow_model.extract_high_quality_streams(threshold_percentile);
     
     // Log information about the result
+    #[cfg(target_arch = "wasm32")]
     web_sys::console::log_1(&format!("flow_model.extract_high_quality_streams returned {} polylines", polylines.len()).into());
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("flow_model.extract_high_quality_streams returned {} polylines", polylines.len());
     
     // Log information about the result
     println!("Generated {} high-quality stream polylines with total {} points", 
