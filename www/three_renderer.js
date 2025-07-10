@@ -213,33 +213,14 @@ export class TerrainRenderer {
     }
     
     setTerrainData(terrainData, dimensions) {
-        // Store dimensions and raw data as in original renderer
-        this.dimensions = dimensions;
-        this.rawTerrainData = terrainData;
+        console.log('Setting terrain data:', `${dimensions[0]}x${dimensions[1]}, resolution: ${dimensions[2]}`);
+        console.log('🔍 DEBUG - setTerrainData called with:', {
+            terrainData_length: terrainData.length,
+            dimensions: dimensions,
+            expected_vertices: (dimensions[0] + 1) * (dimensions[1] + 1)
+        });
         
-        const [width, height, resolution] = dimensions;
-        
-        console.log(`Setting terrain data: ${width}x${height}, resolution: ${resolution}`);
-        
-        // Calculate scale factor using original renderer's logic
-        // Use more moderate scaling for better visual quality as in original
-        let scaleDown;
-        if (Math.max(width, height) > 5000) {
-            scaleDown = 0.3; // Larger value than our previous code
-        } else if (Math.max(width, height) > 3000) {
-            scaleDown = 0.4;
-        } else if (Math.max(width, height) > 1000) {
-            scaleDown = 0.6;
-        } else {
-            scaleDown = 1.0; // No reduction for small DEMs
-        }
-        
-        console.log(`Using scale factor: ${scaleDown} for terrain of size ${width}x${height}`);
-        
-        // Store scale for use in other methods as in original
-        this.terrainScale = scaleDown;
-        
-        // Clear any existing terrain
+        // Clear existing terrain
         if (this.terrainMesh) {
             this.scene.remove(this.terrainMesh);
             this.terrainMesh.geometry.dispose();
@@ -247,8 +228,8 @@ export class TerrainRenderer {
             this.terrainMesh = null;
         }
         
-        // Create simplified high-quality terrain similar to original
-        this.createUltraDetailTerrain(terrainData, width, height, resolution, scaleDown);
+        // Create new terrain
+        this.createUltraDetailTerrain(terrainData, dimensions[0], dimensions[1], dimensions[2], 1);
     }
     
     createUltraDetailTerrain(terrainData, width, height, resolution, scaleDown) {
@@ -286,8 +267,8 @@ export class TerrainRenderer {
             meshHeight: meshHeight
         };
         
-        // Create terrain geometry with scaled dimensions
-        const geometry = new THREE.PlaneGeometry(
+        // ⭐ CUSTOM MESH GENERATION - No more diagonal line artifacts! ⭐
+        const geometry = this.createAlternatingTriangleMesh(
             width * resolution * scaleDown,
             height * resolution * scaleDown,
             meshWidth,
@@ -299,18 +280,15 @@ export class TerrainRenderer {
         let maxHeight = -Infinity;
         let validElevations = [];
         
-        // First pass: collect valid elevations (no negatives, as required)
-        for (let y = 0; y < height; y += skipFactor) {
-            for (let x = 0; x < width; x += skipFactor) {
-                const index = y * width + x;
-                const elevation = terrainData[index];
-                
-                // Only consider valid elevations (not NaN or negative) as in original
-                if (!isNaN(elevation) && elevation >= 0) {
-                    validElevations.push(elevation);
-                    minHeight = Math.min(minHeight, elevation);
-                    maxHeight = Math.max(maxHeight, elevation);
-                }
+        // First pass: collect valid elevations for precomputed data (already optimized)
+        for (let i = 0; i < terrainData.length; i++) {
+            const elevation = terrainData[i];
+            
+            // Only consider valid elevations (not NaN or negative) as in original
+            if (!isNaN(elevation) && elevation >= 0) {
+                validElevations.push(elevation);
+                minHeight = Math.min(minHeight, elevation);
+                maxHeight = Math.max(maxHeight, elevation);
             }
         }
         
@@ -338,17 +316,23 @@ export class TerrainRenderer {
         // Create colors array for vertex coloring
         const colors = new Float32Array(geometry.attributes.position.count * 3);
         
-        // Create UV coordinates for normal mapping
-        const uvs = geometry.attributes.uv.array;
+        // Create UV coordinates for normal mapping (since we're using custom geometry)
+        const uvs = new Float32Array(geometry.attributes.position.count * 2);
         
-        // Set elevations and colors using enhanced approach
-        for (let y = 0; y < meshHeight + 1; y++) {
+        // Set elevations and colors using DIRECT mapping for precomputed data
+        for (let z = 0; z < meshHeight + 1; z++) {
             for (let x = 0; x < meshWidth + 1; x++) {
-                // Map mesh coordinates to original DEM coordinates
-                const demX = Math.min(width - 1, x * skipFactor);
-                const demY = Math.min(height - 1, y * skipFactor);
-                const demIndex = demY * width + demX;
-                const vertexIndex = y * (meshWidth + 1) + x;
+                // ⭐ DIRECT MAPPING: Precomputed data is stored as (meshHeight+1) × (meshWidth+1)
+                // The precomputed data has exactly the right number of vertices - no clamping needed
+                const demX = x;  // Direct mapping 0 to meshWidth
+                const demY = meshHeight - z;  // Y-axis flip to correct orientation
+                const demIndex = demY * (meshWidth + 1) + demX;
+                const vertexIndex = z * (meshWidth + 1) + x;
+                
+                // Debug coordinate mapping for first few vertices
+                if (z < 2 && x < 2) {
+                    console.log(`🔍 Vertex [${z},${x}] → demIndex ${demIndex}, elevation ${terrainData[demIndex]}`);
+                }
                 
                 if (vertexIndex >= geometry.attributes.position.count) continue;
                 
@@ -361,8 +345,8 @@ export class TerrainRenderer {
                     elevation = minHeight - 10;
                 }
                 
-                // Set Z value for this vertex with height exaggeration
-                geometry.attributes.position.setZ(vertexIndex, elevation * heightScale);
+                // Set Y value (elevation) for this vertex with height exaggeration
+                geometry.attributes.position.setY(vertexIndex, elevation * heightScale);
                 
                 // Set vertex color based on elevation using enhanced gradient
                 const i3 = vertexIndex * 3;
@@ -428,12 +412,13 @@ export class TerrainRenderer {
                 const uvIndex = vertexIndex * 2;
                 // Scale UVs to repeat normal maps for better detail
                 uvs[uvIndex] = (x / meshWidth) * 30;
-                uvs[uvIndex + 1] = (y / meshHeight) * 30;
+                uvs[uvIndex + 1] = (z / meshHeight) * 30;
             }
         }
         
-        // Add color attribute to geometry
+        // Add color and UV attributes to geometry
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
         
         // Update the geometry
         geometry.attributes.position.needsUpdate = true;
@@ -452,7 +437,8 @@ export class TerrainRenderer {
         
         // Create mesh
         this.terrainMesh = new THREE.Mesh(geometry, material);
-        this.terrainMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+        // ⭐ REMOVED: No more rotation needed since mesh is generated correctly!
+        // this.terrainMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
         this.terrainMesh.receiveShadow = true;
         this.terrainMesh.castShadow = true;
         
@@ -466,26 +452,108 @@ export class TerrainRenderer {
         this.setupCamera(width, height, resolution, scaleDown);
     }
     
-    // Setup camera as in original renderer
+    /**
+     * Create a custom terrain mesh with alternating triangle patterns
+     * This eliminates the harsh diagonal lines caused by PlaneGeometry's consistent triangulation
+     */
+    createAlternatingTriangleMesh(width, height, widthSegments, heightSegments) {
+        const geometry = new THREE.BufferGeometry();
+        
+        // Calculate vertex counts
+        const vertexCount = (widthSegments + 1) * (heightSegments + 1);
+        const indexCount = widthSegments * heightSegments * 6; // 6 indices per quad (2 triangles)
+        
+        // Create arrays for vertex data
+        const positions = new Float32Array(vertexCount * 3);
+        const indices = new Uint32Array(indexCount);
+        
+        // ⭐ CRITICAL FIX: Generate mesh with correct coordinate system from start
+        // X = East-West, Z = North-South, Y = Up-Down (elevation)
+        let vertexIndex = 0;
+        for (let z = 0; z <= heightSegments; z++) {
+            for (let x = 0; x <= widthSegments; x++) {
+                // ⭐ REVERT: Use original positioning logic but with correct coordinate system
+                // Calculate position (centered around origin)
+                const xPos = (x / widthSegments - 0.5) * width;
+                const zPos = (0.5 - z / heightSegments) * height;
+                const yPos = 0; // Elevation will be set from DEM data
+                
+                positions[vertexIndex * 3] = xPos;     // X: East-West
+                positions[vertexIndex * 3 + 1] = yPos; // Y: Elevation (up-down)
+                positions[vertexIndex * 3 + 2] = zPos; // Z: North-South
+                
+                vertexIndex++;
+            }
+        }
+        
+        // Generate indices with alternating triangle patterns to eliminate diagonal artifacts
+        let indexIndex = 0;
+        for (let z = 0; z < heightSegments; z++) {
+            for (let x = 0; x < widthSegments; x++) {
+                // Calculate vertex indices for this quad
+                const topLeft = z * (widthSegments + 1) + x;
+                const topRight = topLeft + 1;
+                const bottomLeft = (z + 1) * (widthSegments + 1) + x;
+                const bottomRight = bottomLeft + 1;
+                
+                // ⭐ KEY FIX: Alternate triangle orientation to break up diagonal patterns
+                // This creates a checkerboard pattern that eliminates visible seams
+                if ((x + z) % 2 === 0) {
+                    // Pattern A: Top-left to bottom-right diagonal
+                    // Triangle 1: top-left, bottom-left, top-right
+                    indices[indexIndex++] = topLeft;
+                    indices[indexIndex++] = bottomLeft;
+                    indices[indexIndex++] = topRight;
+                    
+                    // Triangle 2: top-right, bottom-left, bottom-right
+                    indices[indexIndex++] = topRight;
+                    indices[indexIndex++] = bottomLeft;
+                    indices[indexIndex++] = bottomRight;
+                } else {
+                    // Pattern B: Top-right to bottom-left diagonal
+                    // Triangle 1: top-left, bottom-left, bottom-right
+                    indices[indexIndex++] = topLeft;
+                    indices[indexIndex++] = bottomLeft;
+                    indices[indexIndex++] = bottomRight;
+                    
+                    // Triangle 2: top-left, bottom-right, top-right
+                    indices[indexIndex++] = topLeft;
+                    indices[indexIndex++] = bottomRight;
+                    indices[indexIndex++] = topRight;
+                }
+            }
+        }
+        
+        // Set the geometry attributes
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        
+        console.log(`🎯 Created alternating triangle mesh: ${vertexCount} vertices, ${indexCount/3} triangles`);
+        
+        return geometry;
+    }
+
     setupCamera(width, height, resolution, scaleDown) {
-        // Calculate terrain dimensions
+        // ⭐ REVERT: Use original camera positioning logic
+        // Calculate terrain dimensions in real-world units
         const terrainWidth = width * resolution * scaleDown;
         const terrainHeight = height * resolution * scaleDown;
         const terrainSize = Math.max(terrainWidth, terrainHeight);
         
-        // Set camera position to view the entire terrain
-        // Using original renderer's positioning approach
+        // Position camera at appropriate distance based on terrain size
         const cameraHeight = terrainSize * 0.8;
         const cameraDistance = terrainSize * 0.7;
         
-        this.camera.position.set(0, cameraHeight, cameraDistance);
+        // Position camera above and to the side for good viewing angle
+        this.camera.position.set(cameraDistance, cameraHeight, cameraDistance);
         this.camera.lookAt(0, 0, 0);
         this.controls.target.set(0, 0, 0);
         
         // Log camera information
-        console.log("Camera positioned at:", this.camera.position);
+        console.log("🎯 Fixed Camera positioned at:", this.camera.position);
         console.log("Looking at target:", this.controls.target);
         console.log("Terrain dimensions:", width, "x", height);
+        console.log("Terrain size (real-world):", terrainSize);
         console.log("Scale factor applied:", scaleDown);
     }
     

@@ -96,6 +96,7 @@ Elevation Data → Mesh Generation → Photorealistic 3D Model
   - Skip factor calculation for large DEMs
   - Maintains critical topographic features
 - **Elevation Mapping**: Vertical exaggeration (8.5x) for visual clarity
+  - **Note**: Exaggeration is purely visual; all hydrological calculations use true geometry
 - **Color Gradients**: 7-step elevation-based coloring:
   - **Deep valleys**: Deep green (low elevation)
   - **Hills**: Olive to yellow ochre (medium elevation)  

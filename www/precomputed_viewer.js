@@ -157,15 +157,31 @@ function renderCatchment(catchmentData) {
     
     console.log('Rendering catchment:', catchmentData.id);
     
-    // Convert the pre-computed data to the format expected by the renderer
-    const terrainData = catchmentData.terrain.elevation_data;
+    // ⭐ CRITICAL FIX: Pass the correct mesh dimensions, not the full DEM dimensions
+    const terrain = catchmentData.terrain;
+    const terrainData = terrain.elevation_data;
+    
+    // Debug: Log the actual values
+    console.log('🔍 DEBUG - Terrain data structure:', {
+        mesh_width: terrain.mesh_width,
+        mesh_height: terrain.mesh_height,
+        skip_factor: terrain.skip_factor,
+        metadata_resolution: catchmentData.metadata.resolution,
+        elevation_data_length: terrainData.length
+    });
+    
+    // What the JS renderer really needs is the *mesh* size it is about to draw
+    // and the spacing between those vertices.
+    const effectiveResolution = catchmentData.metadata.resolution * terrain.skip_factor;
     const dimensions = [
-        catchmentData.metadata.width,
-        catchmentData.metadata.height,
-        catchmentData.metadata.resolution
+        terrain.mesh_width,                         // ✔ actual mesh width (e.g. 1340)
+        terrain.mesh_height,                        // ✔ actual mesh height (e.g. 1340)
+        effectiveResolution                         // ✔ effective cell size on-the-ground
     ];
     
-    // Set the terrain data
+    console.log('🔍 DEBUG - Passing dimensions to renderer:', dimensions);
+    
+    // Set the terrain data with correct dimensions
     renderer.setTerrainData(terrainData, dimensions);
     
     // TODO: Add stream visualization

@@ -106,9 +106,11 @@ impl PrecomputedCatchment {
         // Process sinks
         dem.process_sinks(crate::dem::SinkTreatmentMethod::CompletelyFill);
         
-        // Create flow model
+        // Create flow model with D∞ enhancement
         let mut flow_model = FlowModel::new(dem);
-        flow_model.compute_flow_directions();
+        
+        // Use D∞ flow directions for more natural stream networks
+        flow_model.compute_flow_directions_dinf();
         flow_model.compute_flow_accumulation();
         
         // Generate visualization data
