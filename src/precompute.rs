@@ -85,7 +85,23 @@ impl PrecomputedCatchment {
         println!("Processing catchment {} from {}", catchment_id, dem_path.display());
         
         // Load DEM
-        let mut dem = DigitalElevationModel::from_multiple_geotiffs(&[dem_path])?;
+        let original_dem = DigitalElevationModel::from_multiple_geotiffs(&[dem_path])?;
+        println!("Original DEM: {}x{} at {:.1}m resolution ({} cells)", 
+                 original_dem.width, original_dem.height, original_dem.resolution, 
+                 original_dem.width * original_dem.height);
+        
+        // Downsample to 100m resolution for web efficiency
+        let target_resolution = 100.0; // meters
+        let downsample_factor = (target_resolution / original_dem.resolution).round() as usize;
+        let downsample_factor = downsample_factor.max(1); // Ensure at least 1
+        
+        println!("Downsampling by factor {} ({}m -> {}m)", 
+                 downsample_factor, original_dem.resolution, 
+                 original_dem.resolution * downsample_factor as f64);
+        
+        let mut dem = Self::downsample_dem(original_dem, downsample_factor)?;
+        println!("Downsampled DEM: {}x{} at {:.1}m resolution ({} cells)", 
+                 dem.width, dem.height, dem.resolution, dem.width * dem.height);
         
         // Process sinks
         dem.process_sinks(crate::dem::SinkTreatmentMethod::CompletelyFill);
@@ -248,6 +264,62 @@ impl PrecomputedCatchment {
         }
         
         (min_elev, max_elev)
+    }
+    
+    /// Downsample a DEM by taking every nth cell
+    fn downsample_dem(original: DigitalElevationModel, factor: usize) -> Result<DigitalElevationModel, Box<dyn std::error::Error>> {
+        if factor <= 1 {
+            return Ok(original);
+        }
+        
+        let new_width = (original.width + factor - 1) / factor;
+        let new_height = (original.height + factor - 1) / factor;
+        let new_resolution = original.resolution * factor as f64;
+        
+        let mut new_data = Vec::with_capacity(new_width * new_height);
+        
+        // Sample every nth cell
+        for y in 0..new_height {
+            for x in 0..new_width {
+                let orig_x = x * factor;
+                let orig_y = y * factor;
+                
+                // Ensure we don't go out of bounds
+                let safe_x = orig_x.min(original.width - 1);
+                let safe_y = orig_y.min(original.height - 1);
+                
+                let idx = safe_y * original.width + safe_x;
+                new_data.push(original.data[idx]);
+            }
+        }
+        
+        // Update bounds to match new resolution
+        let bounds = (
+            original.bounds.0,
+            original.bounds.1,
+            original.bounds.0 + new_width as f64 * new_resolution,
+            original.bounds.1 + new_height as f64 * new_resolution,
+        );
+        
+        // Update geo_transform
+        let geo_transform = [
+            original.geo_transform[0],
+            new_resolution,
+            original.geo_transform[2],
+            original.geo_transform[3],
+            original.geo_transform[4],
+            original.geo_transform[5] * factor as f64,
+        ];
+        
+        Ok(DigitalElevationModel {
+            width: new_width,
+            height: new_height,
+            resolution: new_resolution,
+            data: new_data,
+            no_data_value: original.no_data_value,
+            geo_transform,
+            bounds,
+        })
     }
 }
 
