@@ -573,7 +573,7 @@ impl FlowModel {
         
         // Process cells in batches 
         let cells_per_batch = 100;
-        let mut total_polylines = 0;
+        let mut _total_polylines = 0;
         let mut batch_start = 0;
         
         // Continue processing batches until we run out of cells
@@ -594,8 +594,8 @@ impl FlowModel {
                 
                 // Track flow accumulation for adaptive sampling
                 let mut last_flow = self.flow_accumulation[idx];
-                let mut last_point_added = true;
-                let mut distance_since_last_point = 0;
+                let mut _last_point_added = true;
+                let mut _distance_since_last_point = 0;
                 
                 // Trace downstream
                 loop {
@@ -619,14 +619,14 @@ impl FlowModel {
                         1.0 
                     };
                     
-                    let significant_flow_change = flow_change_ratio > 0.05; // 5% change
-                    let enough_distance = distance_since_last_point >= 2;  // Reduced from 3 to 2 cells
+                    let _significant_flow_change = flow_change_ratio > 0.05; // 5% change
+                    let _enough_distance = _distance_since_last_point >= 2;  // Reduced from 3 to 2 cells
                     
                     // Always add points to ensure continuous flow lines
                     polyline.push(current);
                     last_flow = current_flow;
-                    last_point_added = true;
-                    distance_since_last_point = 0;
+                    _last_point_added = true;
+                    _distance_since_last_point = 0;
                     
                     // Find the downstream cell to continue tracing
                     if let Some(downstream) = self.get_downstream_cell(cx, cy) {
@@ -644,7 +644,7 @@ impl FlowModel {
                         // Ensure the final point (the outlet/sink itself) is added
                         // The current point `(cx, cy)` IS the last point here.
                         // Ensure it was added on the previous iteration or add it now.
-                        if !last_point_added { // If the last loop iteration decided not to add it
+                        if !_last_point_added { // If the last loop iteration decided not to add it
                             polyline.push(current);
                         }
                         break;
@@ -655,7 +655,7 @@ impl FlowModel {
                 // Add the polyline if it has enough points
                 if polyline.len() >= 2 {
                     polylines.push(polyline);
-                    total_polylines += 1;
+                    _total_polylines += 1;
                 }
             }
             
@@ -669,8 +669,8 @@ impl FlowModel {
     
     /// Extract a hierarchical stream network with multi-level detail
     pub fn extract_hierarchical_streams(&self) -> Vec<(Vec<Vec<(usize, usize)>>, f32)> {
-        let width = self.dem.width;
-        let height = self.dem.height;
+        let _width = self.dem.width;
+        let _height = self.dem.height;
         
         // Find the maximum flow accumulation value
         let max_flow = self.flow_accumulation.iter()

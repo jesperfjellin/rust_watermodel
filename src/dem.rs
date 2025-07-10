@@ -2,13 +2,13 @@ use std::path::Path;
 #[cfg(feature = "native")]
 use gdal::Dataset;
 #[cfg(feature = "native")]
-use gdal::raster::RasterBand;
+#[allow(unused_imports)]
 use ndarray::{Array2, ShapeError};
+
 use thiserror::Error;
-use std::collections::{BinaryHeap, HashSet, VecDeque};
+use std::collections::BinaryHeap;
 use std::cmp::Reverse as StdReverse;
 use std::cmp::Ordering;
-use std::fmt;
 
 #[derive(Error, Debug)]
 pub enum DemError {
@@ -24,7 +24,7 @@ pub enum DemError {
     
     #[cfg(feature = "native")]
     #[error("Array shape error: {0}")]
-    ShapeError(#[from] ShapeError),
+    ShapeError(#[from] ndarray::ShapeError),
     
     #[error("Failed to merge DEMs: {0}")]
     MergeError(String),
@@ -82,8 +82,8 @@ impl DigitalElevationModel {
         let y_resolution = geo_transform[5].abs();
         let resolution = (x_resolution + y_resolution) / 2.0;
         
-        // Get the no data value (if present)
-        let no_data_value = band.no_data_value();
+        // Get the no data value (if present) - convert from f64 to f32
+        let no_data_value = band.no_data_value().map(|v| v as f32);
         
         // Read the entire DEM into memory
         let data_array: Array2<f32> = band.read_as_array(
@@ -141,7 +141,10 @@ impl DigitalElevationModel {
             // Check resolution compatibility
             if let Some(res) = common_resolution {
                 // Allow a small tolerance for floating point differences
-                if (dem.resolution - res).abs() > 0.01 {
+                let dem_res: f64 = dem.resolution;
+                let common_res: f64 = res;
+                let resolution_diff = (dem_res - common_res).abs();
+                if resolution_diff > 0.01f64 {
                     return Err(DemError::MergeError(
                         format!("Resolution mismatch: {} vs {}", dem.resolution, res)
                     ));

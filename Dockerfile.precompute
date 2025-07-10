@@ -1,0 +1,50 @@
+FROM rust:latest as builder
+
+# Install system dependencies including GDAL and LLVM/Clang for bindgen
+RUN apt-get update && apt-get install -y \
+    libgdal-dev \
+    gdal-bin \
+    libclang-dev \
+    clang \
+    pkg-config \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for GDAL
+ENV GDAL_HOME=/usr
+ENV GDAL_INCLUDE_DIR=/usr/include/gdal
+ENV GDAL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+ENV PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig
+
+# Create a new empty project
+WORKDIR /app
+
+# Copy over manifests
+COPY Cargo.toml Cargo.lock ./
+
+# Copy source code
+COPY src ./src
+
+# Build the pre-computation tool
+RUN cargo build --release --bin precompute --features "native"
+
+# Runtime image
+FROM debian:bullseye-slim
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y \
+    libgdal28 \
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy the binary from the builder stage
+COPY --from=builder /app/target/release/precompute .
+
+# Create directories for input and output
+RUN mkdir -p /data/input /data/output
+
+# Set the command to run the pre-computation tool
+ENTRYPOINT ["./precompute"]
+CMD ["--help"]  
