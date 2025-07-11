@@ -1,367 +1,127 @@
 /**
- * Advanced Water Body Detection Algorithm
- * 
- * Uses flow accumulation + slope analysis to identify actual water bodies:
- * - High flow accumulation = water naturally flows there
- * - Very low slope = flat enough for water to pool/flow slowly
- * - Connected patches = real water bodies are continuous
- * 
- * This approach identifies real rivers and lakes, not artificial depressions.
+ * Topographically-Aware Water Detection Algorithm  ─  strict 0.2 m rule
+ *
+ *  • Seed: vertices whose 8 neighbours differ ≤ 0.2 m **and**
+ *          local slope ≤ 2 % (≈1 m / 50 m).
+ *  • Grow: flood-fill only to neighbours that are
+ *          – not uphill (dElev ≤ 0),
+ *          – |dElev| ≤ 0.2 m,
+ *          – slope ≤ 2 %.
+ *
+ *  DEM grid spacing is assumed to be 100 m (change CELL_SIZE if different).
+ *  Works directly on raw DEM vertices stored as (meshH+1) × (meshW+1).
  */
-export class WaterDetectionAlgorithm {
-    constructor(renderer) {
-        this.renderer = renderer;
-        this.debugMode = true;
-    }
 
-    /**
-     * Main water body detection using flow accumulation + slope analysis
-     */
-    detectWaterBodies(flowAccumulation, slopes, meshWidth, meshHeight) {
-        console.log('🌊 Starting water body detection using Flow + Slope method');
-        
-        // Get raw elevation data (no vertical exaggeration)
-        const rawElevData = this.renderer.storedTerrainData;
-        if (!rawElevData || rawElevData.length === 0) {
-            console.error('❌ No raw terrain data available');
-            return new Array(meshWidth * meshHeight).fill(false);
+console.log('✅ Loading strict topographic water-detection algorithm');
+
+const FLAT_THRESHOLD = 0.2;      // metres
+const CELL_SIZE      = 100;      // metres per grid step (DEM resolution)
+const MAX_SLOPE      = 0.02;     // 2 % grade  (= 0.02 = 0.02 m / 1 m)
+
+function vIdx(x, y, w, h) {        // consistent y-flip helper
+  return (h - y) * w + x;
+}
+
+/**
+ * Detect water bodies and return an array of vertex indices.
+ */
+function detectWaterBodiesTopographic(flowAccum, slopes,
+                                      elevationData,
+                                      meshWidth, meshHeight) {
+
+  const W = meshWidth  + 1;
+  const H = meshHeight + 1;
+
+  if (!elevationData || elevationData.length !== W * H) {
+    console.error('❌ Invalid elevation array');
+    return [];
+  }
+
+  const seeds = findFlatSeeds(elevationData, W, H);
+  const water = new Set();
+
+  seeds.forEach(seed => growWater(seed));
+
+  console.log(`💧 Detected ${water.size} water vertices in ${seeds.length} seed patches`);
+  return Array.from(water);
+
+  /* ---------- helpers ---------- */
+
+  /** find seed vertices that satisfy flatness + slope */
+  function findFlatSeeds(elev, w, h) {
+    const out = [];
+    for (let y = 3; y < h - 3; ++y)
+      for (let x = 3; x < w - 3; ++x) {
+
+        const cIdx = vIdx(x, y, w, h);
+        const cZ   = elev[cIdx];
+        let ok = true;
+
+        for (let dy = -1; dy <= 1 && ok; ++dy)
+          for (let dx = -1; dx <= 1 && ok; ++dx) {
+            if (!dx && !dy) continue;
+            const nIdx = vIdx(x + dx, y + dy, w, h);
+            const nZ   = elev[nIdx];
+            const dZ   = Math.abs(cZ - nZ);
+            const slope = dZ / CELL_SIZE;
+            if (dZ > FLAT_THRESHOLD || slope > MAX_SLOPE) ok = false;
+          }
+
+        if (ok) out.push({ x, y, idx: cIdx, elevation: cZ });
+      }
+    console.log(`🔍 Flat seeds: ${out.length}`);
+    return out;
+  }
+
+  /** flood-fill outward under strict downhill/flat criteria */
+  function growWater(start) {
+    const q     = [start];
+    const seen  = new Set();
+    const local = [];
+
+    while (q.length) {
+      const v   = q.shift();
+      const key = `${v.x},${v.y}`;
+      if (seen.has(key) || water.has(v.idx)) continue;
+      seen.add(key);
+
+      const cZ = elevationData[v.idx];
+      water.add(v.idx);
+      local.push(v.idx);
+
+      for (let dy = -1; dy <= 1; ++dy)
+        for (let dx = -1; dx <= 1; ++dx) {
+          if (!dx && !dy) continue;
+
+          const nx = v.x + dx, ny = v.y + dy;
+          if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+
+          const nIdx = vIdx(nx, ny, W, H);
+          if (seen.has(`${nx},${ny}`) || water.has(nIdx)) continue;
+
+          const nZ     = elevationData[nIdx];
+          const dZ     = nZ - cZ;              // neighbour minus current
+          const slope  = Math.abs(dZ) / CELL_SIZE;
+
+          if (dZ > 0)                continue; // uphill not allowed
+          if (Math.abs(dZ) > FLAT_THRESHOLD) continue;
+          if (slope > MAX_SLOPE)      continue;
+
+          q.push({ x: nx, y: ny, idx: nIdx, elevation: nZ });
         }
-
-        // Calculate terrain statistics from raw data
-        const terrainStats = this.calculateTerrainStats(rawElevData);
-        console.log('🏔️ Raw elevation stats:', {
-            min: terrainStats.min.toFixed(1),
-            max: terrainStats.max.toFixed(1),
-            mean: terrainStats.mean.toFixed(1)
-        });
-
-        // Calculate flow accumulation statistics
-        const flowStats = this.calculateFlowStats(flowAccumulation);
-        console.log('🌊 Flow accumulation stats:', {
-            min: flowStats.min.toFixed(1),
-            max: flowStats.max.toFixed(1),
-            mean: flowStats.mean.toFixed(1),
-            threshold95: flowStats.threshold95.toFixed(1),
-            threshold99: flowStats.threshold99.toFixed(1)
-        });
-
-        // Step 1: Identify high-flow + low-slope cells
-        console.log('🌊 Step 1: Identifying high-flow + low-slope cells...');
-        const waterMask = this.identifyWaterCells(
-            flowAccumulation, 
-            slopes, 
-            rawElevData, 
-            meshWidth, 
-            meshHeight, 
-            flowStats, 
-            terrainStats
-        );
-
-        const initialWaterCount = waterMask.filter(cell => cell).length;
-        console.log('🌊 Initial water candidates:', initialWaterCount, 'cells');
-
-        // Step 2: Filter by connected components (remove tiny patches)
-        console.log('🌊 Step 2: Filtering by connected components...');
-        const filteredMask = this.filterByConnectedComponents(waterMask, meshWidth, meshHeight);
-        const filteredCount = filteredMask.filter(cell => cell).length;
-        console.log('🌊 Connected component filter:', (initialWaterCount - filteredCount), 'cells removed,', filteredCount, 'remaining');
-
-        // Step 3: Apply morphological closing (fill small gaps)
-        console.log('🌊 Step 3: Applying morphological closing...');
-        const finalMask = this.morphologicalClosing(filteredMask, meshWidth, meshHeight);
-        const finalCount = finalMask.filter(cell => cell).length;
-        console.log('🌊 Morphological closing:', filteredCount, '→', finalCount, 'cells');
-
-        console.log('🌊 Final water detection:', finalCount, 'cells marked as water');
-        return finalMask;
     }
 
-    /**
-     * Calculate terrain statistics from raw elevation data
-     */
-    calculateTerrainStats(elevationData) {
-        const validElevations = elevationData.filter(val => val > 0 && !isNaN(val));
-        const min = Math.min(...validElevations);
-        const max = Math.max(...validElevations);
-        const mean = validElevations.reduce((a, b) => a + b, 0) / validElevations.length;
-        const range = max - min;
-        
-        return { min, max, mean, range };
-    }
+    if (local.length >= 5)
+      console.log(`🌊 water body grown → ${local.length} vertices`);
+    else
+      local.forEach(idx => water.delete(idx));  // discard tiny puddles
+  }
+}
 
-    /**
-     * Calculate flow accumulation statistics
-     */
-    calculateFlowStats(flowAccumulation) {
-        const validFlow = flowAccumulation.filter(val => val > 0 && !isNaN(val));
-        const min = Math.min(...validFlow);
-        const max = Math.max(...validFlow);
-        const mean = validFlow.reduce((a, b) => a + b, 0) / validFlow.length;
-        
-        // Calculate percentile thresholds
-        const sortedFlow = [...validFlow].sort((a, b) => a - b);
-        const threshold95 = sortedFlow[Math.floor(sortedFlow.length * 0.95)];
-        const threshold99 = sortedFlow[Math.floor(sortedFlow.length * 0.99)];
-        
-        return { min, max, mean, threshold95, threshold99 };
-    }
-
-    /**
-     * Identify water cells using primarily flatness, with flow accumulation as secondary criteria
-     */
-    identifyWaterCells(flowAccumulation, slopes, elevationData, width, height, flowStats, terrainStats) {
-        const waterMask = new Array(width * height).fill(false);
-        
-        // FLATNESS is the primary indicator of water bodies
-        const extremeFlatSlope = 0.005;  // Extremely flat (0.5% grade) - likely water
-        const veryFlatSlope = 0.01;      // Very flat (1% grade) - possible water
-        const flatSlope = 0.02;          // Flat (2% grade) - rivers only
-        
-        // Flow accumulation thresholds (much more conservative)
-        const moderateFlowThreshold = flowStats.mean * 1.5; // 50% above average
-        const highFlowThreshold = flowStats.threshold95;     // Top 5% for rivers
-        
-        let lakeCount = 0;
-        let riverCount = 0;
-        let flatAreaCount = 0;
-        
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                const flow = flowAccumulation[idx];
-                const slope = slopes[idx];
-                const elevation = elevationData[idx];
-                
-                // Skip invalid cells
-                if (flow <= 0 || slope < 0 || elevation <= 0 || isNaN(flow) || isNaN(slope) || isNaN(elevation)) {
-                    continue;
-                }
-                
-                // Criterion 1: Extremely flat areas (likely lakes/reservoirs)
-                // These have very low slopes and don't need high flow accumulation
-                if (slope <= extremeFlatSlope) {
-                    // Additional checks to avoid flat mountain tops
-                    const isLowElevation = elevation < (terrainStats.min + terrainStats.range * 0.7);
-                    const hasMinimalFlow = flow >= Math.max(2, flowStats.mean * 0.5); // At least some flow
-                    
-                    if (isLowElevation && hasMinimalFlow) {
-                        waterMask[idx] = true;
-                        lakeCount++;
-                        continue;
-                    }
-                }
-                
-                // Criterion 2: Very flat areas with moderate flow (valley lakes)
-                if (slope <= veryFlatSlope && flow >= moderateFlowThreshold) {
-                    const isLowElevation = elevation < (terrainStats.min + terrainStats.range * 0.5);
-                    
-                    if (isLowElevation) {
-                        waterMask[idx] = true;
-                        flatAreaCount++;
-                        continue;
-                    }
-                }
-                
-                // Criterion 3: Rivers (higher flow + moderate flatness)
-                // Only for clearly flowing water, not pooling water
-                if (flow >= highFlowThreshold && slope <= flatSlope) {
-                    // Make sure it's not just a steep drainage channel
-                    const isNotTooSteep = slope >= 0.005; // At least 0.5% slope to ensure it's flowing
-                    
-                    if (isNotTooSteep) {
-                        waterMask[idx] = true;
-                        riverCount++;
-                        continue;
-                    }
-                }
-            }
-        }
-        
-        console.log('🌊 Water cell breakdown:', {
-            lakes: lakeCount,
-            flatAreas: flatAreaCount,
-            rivers: riverCount,
-            total: lakeCount + flatAreaCount + riverCount
-        });
-        
-        return waterMask;
-    }
-
-    /**
-     * Filter out small disconnected patches using connected component analysis
-     */
-    filterByConnectedComponents(waterMask, width, height) {
-        const visited = new Array(width * height).fill(false);
-        const filteredMask = new Array(width * height).fill(false);
-        
-        // Minimum size for water bodies (adjust based on resolution)
-        const minWaterBodySize = 6; // At least 6 connected cells
-        
-        for (let y = 0; y < height; y++) {
-            for (let x = 0; x < width; x++) {
-                const idx = y * width + x;
-                
-                if (waterMask[idx] && !visited[idx]) {
-                    // Find connected component using flood fill
-                    const component = this.floodFillComponent(waterMask, visited, x, y, width, height);
-                    
-                    // Keep component if it's large enough
-                    if (component.length >= minWaterBodySize) {
-                        for (const cellIdx of component) {
-                            filteredMask[cellIdx] = true;
-                        }
-                    }
-                }
-            }
-        }
-        
-        return filteredMask;
-    }
-
-    /**
-     * Flood fill to find connected component
-     */
-    floodFillComponent(waterMask, visited, startX, startY, width, height) {
-        const component = [];
-        const stack = [{x: startX, y: startY}];
-        
-        while (stack.length > 0) {
-            const {x, y} = stack.pop();
-            const idx = y * width + x;
-            
-            if (x < 0 || x >= width || y < 0 || y >= height || visited[idx] || !waterMask[idx]) {
-                continue;
-            }
-            
-            visited[idx] = true;
-            component.push(idx);
-            
-            // Add 8-connected neighbors
-            stack.push({x: x+1, y: y});
-            stack.push({x: x-1, y: y});
-            stack.push({x: x, y: y+1});
-            stack.push({x: x, y: y-1});
-            stack.push({x: x+1, y: y+1});
-            stack.push({x: x-1, y: y-1});
-            stack.push({x: x+1, y: y-1});
-            stack.push({x: x-1, y: y+1});
-        }
-        
-        return component;
-    }
-
-    /**
-     * Apply morphological closing to fill small gaps in water bodies
-     */
-    morphologicalClosing(waterMask, width, height) {
-        // First apply dilation, then erosion
-        const dilated = this.morphologicalDilation(waterMask, width, height);
-        const closed = this.morphologicalErosion(dilated, width, height);
-        return closed;
-    }
-
-    /**
-     * Morphological dilation (expand water areas)
-     */
-    morphologicalDilation(waterMask, width, height) {
-        const dilated = [...waterMask];
-        
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
-                const idx = y * width + x;
-                
-                if (!waterMask[idx]) {
-                    // Check if any neighbor is water
-                    const hasWaterNeighbor = [
-                        [-1, -1], [-1, 0], [-1, 1],
-                        [0, -1],           [0, 1],
-                        [1, -1],  [1, 0],  [1, 1]
-                    ].some(([dx, dy]) => {
-                        const nx = x + dx;
-                        const ny = y + dy;
-                        const nIdx = ny * width + nx;
-                        return waterMask[nIdx];
-                    });
-                    
-                    if (hasWaterNeighbor) {
-                        dilated[idx] = true;
-                    }
-                }
-            }
-        }
-        
-        return dilated;
-    }
-
-    /**
-     * Morphological erosion (shrink water areas)
-     */
-    morphologicalErosion(waterMask, width, height) {
-        const eroded = [...waterMask];
-        
-        for (let y = 1; y < height - 1; y++) {
-            for (let x = 1; x < width - 1; x++) {
-                const idx = y * width + x;
-                
-                if (waterMask[idx]) {
-                    // Check if all neighbors are water
-                    const allNeighborsWater = [
-                        [-1, -1], [-1, 0], [-1, 1],
-                        [0, -1],           [0, 1],
-                        [1, -1],  [1, 0],  [1, 1]
-                    ].every(([dx, dy]) => {
-                        const nx = x + dx;
-                        const ny = y + dy;
-                        const nIdx = ny * width + nx;
-                        return waterMask[nIdx];
-                    });
-                    
-                    if (!allNeighborsWater) {
-                        eroded[idx] = false;
-                    }
-                }
-            }
-        }
-        
-        return eroded;
-    }
-
-    /**
-     * Apply water coloring to the terrain mesh
-     */
-    applyWaterColoring(waterMask, meshWidth, meshHeight) {
-        if (!this.renderer.terrainMesh || !this.renderer.terrainMesh.geometry) {
-            console.error('❌ No terrain geometry available for water coloring');
-            return;
-        }
-
-        const geometry = this.renderer.terrainMesh.geometry;
-        const colors = geometry.attributes.color;
-        
-        if (!colors) {
-            console.error('❌ No color attribute found on terrain geometry');
-            return;
-        }
-
-        let waterVerticesCount = 0;
-        
-        // Apply water coloring to vertices
-        for (let y = 0; y < meshHeight; y++) {
-            for (let x = 0; x < meshWidth; x++) {
-                const maskIdx = y * meshWidth + x;
-                const vertexIdx = y * (meshWidth + 1) + x;
-                
-                if (waterMask[maskIdx]) {
-                    // Apply blue water color
-                    colors.setXYZ(vertexIdx, 0.2, 0.5, 1.0); // Bright blue
-                    waterVerticesCount++;
-                }
-            }
-        }
-        
-        // Update the geometry
-        colors.needsUpdate = true;
-        
-        console.log('🌊 Applied water coloring to', waterVerticesCount, 'vertices');
-    }
-} 
+/* ----------------------------------------------------------------- */
+/* module / browser export                                           */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { detectWaterBodiesTopographic };
+} else {
+  window.detectWaterBodiesTopographic = detectWaterBodiesTopographic;
+}

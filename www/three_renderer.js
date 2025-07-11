@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { WaterDetectionAlgorithm } from './water_detection_algorithm.js';
 import { FlyControls } from 'three/addons/controls/FlyControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -28,9 +27,6 @@ export class TerrainRenderer {
         
         // Initialize the 3D components
         this.init();
-        
-        // Initialize water detection algorithm
-        this.waterDetection = new WaterDetectionAlgorithm(this);
     }
     
     init() {
@@ -332,6 +328,8 @@ export class TerrainRenderer {
         this.heightScale = heightScale;
         this.storedTerrainData = terrainData;
         
+        this.rawTerrainData = terrainData;  // Store unscaled elevation data for water detection algorithms
+        
         // Create colors array for vertex coloring
         const colors = new Float32Array(geometry.attributes.position.count * 3);
         
@@ -341,8 +339,8 @@ export class TerrainRenderer {
         // Set elevations and colors using DIRECT mapping for precomputed data
         for (let z = 0; z < meshHeight + 1; z++) {
             for (let x = 0; x < meshWidth + 1; x++) {
-                // ⭐ DIRECT MAPPING: Precomputed data is stored as (meshHeight+1) × (meshWidth+1)
-                // The precomputed data has exactly the right number of vertices - no clamping needed
+                // Direct mapping for precomputed data stored as (meshHeight+1) × (meshWidth+1)
+                // Precomputed data has exactly the right number of vertices
                 const demX = x;  // Direct mapping 0 to meshWidth
                 const demY = meshHeight - z;  // Y-axis flip to correct orientation
                 const demIndex = demY * (meshWidth + 1) + demX;
@@ -350,7 +348,7 @@ export class TerrainRenderer {
                 
                 // Debug coordinate mapping for first few vertices
                 if (z < 2 && x < 2) {
-                    console.log(`🔍 Vertex [${z},${x}] → demIndex ${demIndex}, elevation ${terrainData[demIndex]}`);
+                    console.log(`Vertex [${z},${x}] → demIndex ${demIndex}, elevation ${terrainData[demIndex]}`);
                 }
                 
                 if (vertexIndex >= geometry.attributes.position.count) continue;
@@ -365,7 +363,8 @@ export class TerrainRenderer {
                 }
                 
                 // Set Y value (elevation) for this vertex with height exaggeration
-                geometry.attributes.position.setY(vertexIndex, elevation * heightScale);
+                const scaledElevation = elevation * heightScale;
+                geometry.attributes.position.setY(vertexIndex, scaledElevation);
                 
                 // Set vertex color based on elevation using enhanced gradient
                 const i3 = vertexIndex * 3;
@@ -435,6 +434,9 @@ export class TerrainRenderer {
             }
         }
         
+
+        this.scaledTerrainData = Float32Array.from(geometry.attributes.position.array);
+        
         // Add color and UV attributes to geometry
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
@@ -456,8 +458,7 @@ export class TerrainRenderer {
         
         // Create mesh
         this.terrainMesh = new THREE.Mesh(geometry, material);
-        // ⭐ REMOVED: No more rotation needed since mesh is generated correctly!
-        // this.terrainMesh.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+        // No rotation needed since mesh is generated correctly
         this.terrainMesh.receiveShadow = true;
         this.terrainMesh.castShadow = true;
         
@@ -486,12 +487,11 @@ export class TerrainRenderer {
         const positions = new Float32Array(vertexCount * 3);
         const indices = new Uint32Array(indexCount);
         
-        // ⭐ CRITICAL FIX: Generate mesh with correct coordinate system from start
+        // Generate mesh with proper coordinate system
         // X = East-West, Z = North-South, Y = Up-Down (elevation)
         let vertexIndex = 0;
         for (let z = 0; z <= heightSegments; z++) {
             for (let x = 0; x <= widthSegments; x++) {
-                // ⭐ REVERT: Use original positioning logic but with correct coordinate system
                 // Calculate position (centered around origin)
                 const xPos = (x / widthSegments - 0.5) * width;
                 const zPos = (0.5 - z / heightSegments) * height;
@@ -515,8 +515,8 @@ export class TerrainRenderer {
                 const bottomLeft = (z + 1) * (widthSegments + 1) + x;
                 const bottomRight = bottomLeft + 1;
                 
-                // ⭐ KEY FIX: Alternate triangle orientation to break up diagonal patterns
-                // This creates a checkerboard pattern that eliminates visible seams
+                // Alternate triangle orientation to break up diagonal patterns
+                // Creates a checkerboard pattern that eliminates visible seams
                 if ((x + z) % 2 === 0) {
                     // Pattern A: Top-left to bottom-right diagonal
                     // Triangle 1: top-left, bottom-left, top-right
@@ -928,12 +928,6 @@ export class TerrainRenderer {
         return 0;
     }
 
-    
-
-
-    
-
-    
 
     
     // Get elevation at specific coordinates with proper indexing
@@ -949,26 +943,81 @@ export class TerrainRenderer {
     }
     
 
-    
-
-    
-
-    
-
-
     // Detect water bodies and apply blue coloring to terrain mesh
     detectAndApplyWaterBodies(flowAccumulation, slopes, meshWidth, meshHeight) {
-        console.log('🌊 Starting water body detection and terrain recoloring');
+        console.log('🌊 Starting topographic water body detection and terrain recoloring');
+        console.log(`🔍 DEBUG - Input parameters: meshWidth=${meshWidth}, meshHeight=${meshHeight}`);
+        console.log(`🔍 DEBUG - Elevation data length: ${this.storedTerrainData ? this.storedTerrainData.length : 'null'}`);
         
-        // Detect water bodies using the new dedicated algorithm
-        const waterMask = this.waterDetection.detectWaterBodies(flowAccumulation, slopes, meshWidth, meshHeight);
+        // Check if we have the required elevation data
+        if (!this.storedTerrainData) {
+            console.warn('🌊 No elevation data available for water detection');
+            return;
+        }
         
-        // Apply water coloring to the terrain mesh
-        this.waterDetection.applyWaterColoring(waterMask, meshWidth, meshHeight);
+        // Use raw terrain data for water detection instead of scaled data
+        const waterVertexIndices = detectWaterBodiesTopographic(
+            flowAccumulation, 
+            slopes, 
+            this.rawTerrainData,    // Use raw DEM data, not scaled
+            meshWidth, 
+            meshHeight
+        );
+        
+        console.log(`🌊 Topographic water detection completed successfully - found ${waterVertexIndices.length} water vertices`);
+        
+        // Apply water coloring to detected vertices
+        this.applyWaterColoring(waterVertexIndices, meshWidth, meshHeight);
     }
     
 
-    
+    // Reusable vertex index helper with consistent y-flip for mesh coordinate system
+    vIdx(x, y, w, h) { 
+        return (h - y) * w + x; 
+    }
+
+    // Apply water coloring to detected water vertices
+    applyWaterColoring(waterVertexIndices, meshWidth, meshHeight) {
+        console.log('🌊 Applying water coloring to terrain mesh');
+        
+        if (!this.terrainMesh || !this.terrainMesh.geometry.attributes.color) {
+            console.warn('🌊 No terrain mesh or color attributes available');
+            return;
+        }
+        
+        const colors = this.terrainMesh.geometry.attributes.color;
+        const vertexWidth = meshWidth + 1;
+        const vertexHeight = meshHeight + 1;
+        
+        const waterColor = [0.1, 0.4, 0.8]; // Nice blue color for water
+        let coloredVertices = 0;
+        
+        // Use consistent vertex indexing throughout
+        for (const vertexIndex of waterVertexIndices) {
+            // Validate vertex index is within bounds
+            if (vertexIndex < 0 || vertexIndex >= colors.count) {
+                console.warn(`🌊 Invalid vertex index: ${vertexIndex}`);
+                continue;
+            }
+            
+            // Convert vertex index to x, y coordinates for debugging using consistent helper
+            const x = vertexIndex % vertexWidth;
+            const y = Math.floor(vertexIndex / vertexWidth);
+            
+            // Debug: Show first few water vertices
+            if (coloredVertices < 5) {
+                console.log(`Coloring vertex ${vertexIndex}: (${x},${y})`);
+            }
+            
+            // Apply water color directly to this vertex
+            colors.setXYZ(vertexIndex, ...waterColor);
+            coloredVertices++;
+        }
+        
+        colors.needsUpdate = true;
+        console.log(`🌊 Applied water coloring to ${coloredVertices} vertices (${waterVertexIndices.length} total)`);
+    }
+
 
 
     // Compatibility stubs for other visualization data

@@ -22,6 +22,9 @@ async function initializeViewer() {
     try {
         renderer = new TerrainRenderer(canvas3d);
         
+        // Expose renderer globally for console debugging
+        window.renderer = renderer;
+        
         // Handle window resize
         window.addEventListener('resize', () => {
             canvas3d.width = window.innerWidth;
