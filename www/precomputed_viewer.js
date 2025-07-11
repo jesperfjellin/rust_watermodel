@@ -184,8 +184,30 @@ function renderCatchment(catchmentData) {
     // Set the terrain data with correct dimensions
     renderer.setTerrainData(terrainData, dimensions);
     
-    // TODO: Add stream visualization
-    // TODO: Add water flow visualization
+    // Add stream visualization using precomputed stream networks
+    if (catchmentData.streams) {
+        console.log('🌊 Adding stream visualization');
+        renderer.setStreamPolylines(
+            catchmentData.streams,                    // Stream polylines at different levels
+            catchmentData.flow.flow_accumulation,     // Flow accumulation for thickness
+            terrain.mesh_width,                       // Mesh width
+            terrain.mesh_height,                      // Mesh height  
+            effectiveResolution                       // Grid resolution
+        );
+    }
+    
+    // ⭐ NEW: Add water body detection using flow and slope data
+    if (catchmentData.flow && catchmentData.flow.slopes && catchmentData.flow.flow_accumulation) {
+        console.log('🌊 Triggering water body detection');
+        renderer.detectAndApplyWaterBodies(
+            catchmentData.flow.flow_accumulation,
+            catchmentData.flow.slopes,
+            terrain.mesh_width,
+            terrain.mesh_height
+        );
+    }
+    
+    // TODO: Add water flow visualization (particle spawns, etc.)
 }
 
 // Initialize when page loads

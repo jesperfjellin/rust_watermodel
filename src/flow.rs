@@ -182,7 +182,65 @@ impl FlowModel {
     }
     
     /// Determine the downstream cell indices for each cell based on flow direction
+    /// Works with both D8 and D∞ flow methods
     pub fn get_downstream_cell(&self, x: usize, y: usize) -> Option<(usize, usize)> {
+        if x >= self.dem.width || y >= self.dem.height {
+            return None;
+        }
+        
+        let idx = y * self.dem.width + x;
+        
+        match self.flow_method {
+            FlowMethod::DInf => {
+                // For D∞, find the downstream cell with highest flow proportion
+                if let Some(ref flow_proportions) = self.dinf_flow_proportions {
+                    let proportions = &flow_proportions[idx];
+                    
+                    // Direction offsets (matching the proportions array)
+                    let directions = [
+                        (1, 0),    // 0: East
+                        (1, 1),    // 1: Southeast  
+                        (0, 1),    // 2: South
+                        (-1, 1),   // 3: Southwest
+                        (-1, 0),   // 4: West
+                        (-1, -1),  // 5: Northwest
+                        (0, -1),   // 6: North
+                        (1, -1),   // 7: Northeast
+                    ];
+                    
+                    // Find the direction with the highest flow proportion
+                    let mut max_proportion = 0.0;
+                    let mut best_direction = None;
+                    
+                    for dir in 0..8 {
+                        if proportions[dir] > max_proportion {
+                            max_proportion = proportions[dir];
+                            let (dx, dy) = directions[dir];
+                            let nx = x as isize + dx;
+                            let ny = y as isize + dy;
+                            
+                            // Ensure the downstream cell is within bounds
+                            if nx >= 0 && ny >= 0 && nx < self.dem.width as isize && ny < self.dem.height as isize {
+                                best_direction = Some((nx as usize, ny as usize));
+                            }
+                        }
+                    }
+                    
+                    best_direction
+                } else {
+                    // Fallback to D8 if D∞ data not available
+                    self.get_downstream_cell_d8(x, y)
+                }
+            }
+            _ => {
+                // For D8 and MFD, use the traditional D8 method
+                self.get_downstream_cell_d8(x, y)
+            }
+        }
+    }
+    
+    /// Traditional D8 downstream cell detection
+    fn get_downstream_cell_d8(&self, x: usize, y: usize) -> Option<(usize, usize)> {
         if x >= self.dem.width || y >= self.dem.height {
             return None;
         }

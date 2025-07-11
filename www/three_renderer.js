@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { WaterDetectionAlgorithm } from './water_detection_algorithm.js';
 import { FlyControls } from 'three/addons/controls/FlyControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -27,6 +28,9 @@ export class TerrainRenderer {
         
         // Initialize the 3D components
         this.init();
+        
+        // Initialize water detection algorithm
+        this.waterDetection = new WaterDetectionAlgorithm(this);
     }
     
     init() {
@@ -191,6 +195,9 @@ export class TerrainRenderer {
             this.flyControls.update(delta); // Use actual delta time instead of fixed value
         }
         
+        // Update stream Level-of-Detail based on camera position
+        this.updateStreamLOD();
+        
         // Use composer for advanced rendering if available
         if (this.composer) {
             this.composer.render();
@@ -220,13 +227,20 @@ export class TerrainRenderer {
             expected_vertices: (dimensions[0] + 1) * (dimensions[1] + 1)
         });
         
-        // Clear existing terrain
+        // Store terrain data for stream elevation lookup
+        this.storedTerrainData = terrainData;
+        this.storedDimensions = dimensions;
+        
+        // Clear existing terrain and streams
         if (this.terrainMesh) {
             this.scene.remove(this.terrainMesh);
             this.terrainMesh.geometry.dispose();
             this.terrainMesh.material.dispose();
             this.terrainMesh = null;
         }
+        
+        // Clear existing streams when loading new terrain
+        this.clearStreams();
         
         // Create new terrain
         this.createUltraDetailTerrain(terrainData, dimensions[0], dimensions[1], dimensions[2], 1);
@@ -264,7 +278,8 @@ export class TerrainRenderer {
         this.terrainMetadata = {
             skipFactor: skipFactor,
             meshWidth: meshWidth,
-            meshHeight: meshHeight
+            meshHeight: meshHeight,
+            scaleDown: scaleDown
         };
         
         // ⭐ CUSTOM MESH GENERATION - No more diagonal line artifacts! ⭐
@@ -312,6 +327,10 @@ export class TerrainRenderer {
         this.heightScale = heightScale;
         
         console.log(`Using height scale: ${heightScale}`);
+        
+        // Store height scale and terrain data for stream visualization
+        this.heightScale = heightScale;
+        this.storedTerrainData = terrainData;
         
         // Create colors array for vertex coloring
         const colors = new Float32Array(geometry.attributes.position.count * 3);
@@ -671,10 +690,290 @@ export class TerrainRenderer {
         }
     }
     
-    // Stub methods to maintain compatibility with existing code
+    // Stream visualization methods with Level-of-Detail (LOD)
+    setStreamPolylines(streams, flowAccumulation, meshWidth, meshHeight, resolution) {
+        // Store flow data for water body detection
+        this.flowData = {
+            flowAccumulation,
+            slopes: this.slopeData, // Will be set when available
+            meshWidth,
+            meshHeight
+        };
+        console.log('🌊 Setting stream polylines:', {
+            detailed_streams: streams.detailed?.length || 0,
+            medium_streams: streams.medium?.length || 0,
+            major_streams: streams.major?.length || 0
+        });
+        
+        // Store stream data for LOD switching
+        this.streamData = {
+            streams,
+            flowAccumulation,
+            meshWidth,
+            meshHeight,
+            resolution
+        };
+        
+        // Clear existing streams
+        this.clearStreams();
+        
+        // Create stream group with LOD containers
+        this.streamGroup = new THREE.Group();
+        this.scene.add(this.streamGroup);
+        
+        // Create separate groups for each stream level
+        this.majorStreamGroup = new THREE.Group();
+        this.majorStreamGroup.name = 'major_streams';
+        this.streamGroup.add(this.majorStreamGroup);
+        
+        this.mediumStreamGroup = new THREE.Group();
+        this.mediumStreamGroup.name = 'medium_streams';
+        this.streamGroup.add(this.mediumStreamGroup);
+        
+        this.detailedStreamGroup = new THREE.Group();
+        this.detailedStreamGroup.name = 'detailed_streams';
+        this.streamGroup.add(this.detailedStreamGroup);
+        
+        // Render all stream levels but initially hide based on distance
+        if (streams.major && streams.major.length > 0) {
+            this.renderStreamLevel(streams.major, flowAccumulation, meshWidth, meshHeight, resolution, 'major', this.majorStreamGroup);
+        }
+        if (streams.medium && streams.medium.length > 0) {
+            this.renderStreamLevel(streams.medium, flowAccumulation, meshWidth, meshHeight, resolution, 'medium', this.mediumStreamGroup);
+        }
+        if (streams.detailed && streams.detailed.length > 0) {
+            this.renderStreamLevel(streams.detailed, flowAccumulation, meshWidth, meshHeight, resolution, 'detailed', this.detailedStreamGroup);
+        }
+        
+        // Set initial LOD based on camera position
+        this.updateStreamLOD();
+    }
+    
+    renderStreamLevel(polylines, flowAccumulation, meshWidth, meshHeight, resolution, level, targetGroup) {
+        const streamColor = new THREE.Color(0x1e88e5); // Nice blue color
+        
+        // Different thickness ranges for different stream levels
+        const thicknessConfig = {
+            'major': { min: 8.0, max: 15.0, opacity: 0.9 },
+            'medium': { min: 4.0, max: 10.0, opacity: 0.8 },
+            'detailed': { min: 1.5, max: 6.0, opacity: 0.7 }
+        };
+        
+        const config = thicknessConfig[level];
+        
+        // Limit stream count for performance
+        let streamLimit;
+        switch(level) {
+            case 'major': streamLimit = polylines.length; break;  // Render all major streams
+            case 'medium': streamLimit = Math.min(polylines.length, 2500); break;  // Limit medium streams
+            case 'detailed': streamLimit = Math.min(polylines.length, 8000); break;  // Heavily limit detailed streams
+        }
+        
+        const limitedPolylines = polylines.slice(0, streamLimit);
+        console.log(`🌊 Rendering ${limitedPolylines.length} of ${polylines.length} ${level} streams (performance limited)`);
+        
+        for (let i = 0; i < limitedPolylines.length; i++) {
+            const polyline = limitedPolylines[i];
+            if (polyline.length < 2) continue;
+            
+            // Debug first few streams
+            if (i < 2) {
+                console.log(`🔍 Stream ${i} first point: [${polyline[0][0]}, ${polyline[0][1]}]`);
+            }
+            
+            // Calculate average flow accumulation for this stream
+            let totalFlow = 0;
+            let validPoints = 0;
+            
+            for (const [x, y] of polyline) {
+                if (x < meshWidth && y < meshHeight) {
+                    const flowIndex = y * meshWidth + x;
+                    if (flowIndex < flowAccumulation.length) {
+                        totalFlow += flowAccumulation[flowIndex];
+                        validPoints++;
+                    }
+                }
+            }
+            
+            const avgFlow = validPoints > 0 ? totalFlow / validPoints : 1.0;
+            
+            // Create 3D path points
+            const points = [];
+            for (const [x, y] of polyline) {
+                // ⭐ FIXED: Convert grid coordinates to match terrain coordinate system exactly
+                // The terrain uses normalized coordinates: (x / meshWidth - 0.5) * (meshWidth * resolution * scaleDown)
+                // We need to store scaleDown from terrain creation
+                const scaleDown = this.terrainMetadata?.scaleDown || 1.0;
+                
+                // Match the terrain coordinate system exactly
+                const normalizedX = (x / meshWidth - 0.5);
+                const normalizedZ = (0.5 - y / meshHeight); // Y-axis flip to match terrain
+                
+                const worldX = normalizedX * (meshWidth * resolution * scaleDown);
+                const worldZ = normalizedZ * (meshHeight * resolution * scaleDown);
+                
+                // ⭐ FIXED: Get elevation using SAME indexing as terrain (Y-axis flip)
+                let elevation = 0;
+                if (x < meshWidth && y < meshHeight) {
+                    // Must match terrain's coordinate system: demY = meshHeight - z
+                    // For streams: demY = meshHeight - y (same Y-axis flip as terrain)
+                    const demX = x;
+                    const demY = meshHeight - y; // Y-axis flip to match terrain indexing
+                    const elevIndex = demY * (meshWidth + 1) + demX;
+                    elevation = this.getElevationAtIndex(elevIndex);
+                    
+                    // Debug elevation lookup for first few points
+                    if (i < 2 && points.length <= 2) {
+                        const arraySize = this.storedTerrainData ? this.storedTerrainData.length : 'unknown';
+                        console.log(`🔍 Elevation lookup [${x},${y}] → demY=${demY}, demX=${demX}, elevIndex=${elevIndex} (arraySize=${arraySize}), elevation=${elevation}`);
+                    }
+                }
+                
+                points.push(new THREE.Vector3(worldX, elevation + 5, worldZ)); // Slightly above terrain
+                
+                // Debug first few coordinate transformations
+                if (i < 2 && points.length <= 2) {
+                    console.log(`🔍 Stream ${i} point [${x},${y}] → world [${worldX.toFixed(1)}, ${elevation.toFixed(1)}, ${worldZ.toFixed(1)}]`);
+                }
+            }
+            
+            if (points.length < 2) continue;
+            
+            // Create curve from points
+            const curve = new THREE.CatmullRomCurve3(points);
+            
+            // Normalize flow for thickness calculation (logarithmic scale for better visual range)
+            const normalizedFlow = Math.log(Math.max(1, avgFlow)) / Math.log(100); // Log scale 
+            const thickness = config.min + (config.max - config.min) * Math.min(1, normalizedFlow);
+            
+            // Create tube geometry
+            const tubeGeometry = new THREE.TubeGeometry(curve, Math.max(16, points.length * 2), thickness, 8, false);
+            const tubeMaterial = new THREE.MeshBasicMaterial({
+                color: streamColor,
+                transparent: true,
+                opacity: config.opacity
+            });
+            
+            const streamMesh = new THREE.Mesh(tubeGeometry, tubeMaterial);
+            streamMesh.userData = { type: 'stream', level: level, flow: avgFlow };
+            
+            // Add to the target group instead of the main streamGroup
+            targetGroup.add(streamMesh);
+        }
+    }
+    
+    // Update stream Level-of-Detail based on camera distance
+    updateStreamLOD() {
+        if (!this.majorStreamGroup || !this.mediumStreamGroup || !this.detailedStreamGroup) {
+            return; // Stream groups not initialized yet
+        }
+        
+        // Calculate camera distance from terrain center
+        const terrainCenter = new THREE.Vector3(0, 0, 0);
+        const cameraDistance = this.camera.position.distanceTo(terrainCenter);
+        
+        // Define distance thresholds for LOD switching
+        const lodThresholds = {
+            detailed: 15000,  // Show detailed streams when camera is very close
+            medium: 35000,    // Show medium streams when camera is at medium distance  
+            major: 80000      // Always show major streams (up to far distance)
+        };
+        
+        // Determine which stream levels to show based on distance
+        const showDetailed = cameraDistance < lodThresholds.detailed;
+        const showMedium = cameraDistance < lodThresholds.medium;
+        const showMajor = cameraDistance < lodThresholds.major;
+        
+        // Update visibility
+        this.detailedStreamGroup.visible = showDetailed;
+        this.mediumStreamGroup.visible = showMedium;
+        this.majorStreamGroup.visible = showMajor;
+        
+        // Log LOD changes for debugging
+        if (this.lastLODState !== `${showMajor}-${showMedium}-${showDetailed}`) {
+            console.log(`🔍 Stream LOD Update - Distance: ${Math.round(cameraDistance)} | Major: ${showMajor} | Medium: ${showMedium} | Detailed: ${showDetailed}`);
+            this.lastLODState = `${showMajor}-${showMedium}-${showDetailed}`;
+        }
+    }
+    
+    clearStreams() {
+        if (this.streamGroup) {
+            // Dispose of geometries and materials
+            this.streamGroup.traverse((child) => {
+                if (child.isMesh) {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) child.material.dispose();
+                }
+            });
+            
+            this.scene.remove(this.streamGroup);
+            this.streamGroup = null;
+        }
+        
+        // Clear LOD groups
+        this.majorStreamGroup = null;
+        this.mediumStreamGroup = null;
+        this.detailedStreamGroup = null;
+    }
+    
+    getElevationAtIndex(index) {
+        // Helper to get elevation from stored terrain data
+        if (this.storedTerrainData && index < this.storedTerrainData.length) {
+            const elevation = this.storedTerrainData[index];
+            if (!isNaN(elevation) && elevation >= 0) {
+                // Apply the same height scaling as the terrain
+                return elevation * this.heightScale || elevation * 8.5; // Default scale
+            }
+        }
+        return 0;
+    }
+
+    
+
+
+    
+
+    
+
+    
+    // Get elevation at specific coordinates with proper indexing
+    getElevationAtCoords(x, y, meshWidth, meshHeight) {
+        if (x >= meshWidth || y >= meshHeight) return 0;
+        
+        // Use same coordinate system as terrain
+        const demX = x;
+        const demY = meshHeight - y; // Y-axis flip to match terrain
+        const elevIndex = demY * (meshWidth + 1) + demX;
+        
+        return this.getElevationAtIndex(elevIndex);
+    }
+    
+
+    
+
+    
+
+    
+
+
+    // Detect water bodies and apply blue coloring to terrain mesh
+    detectAndApplyWaterBodies(flowAccumulation, slopes, meshWidth, meshHeight) {
+        console.log('🌊 Starting water body detection and terrain recoloring');
+        
+        // Detect water bodies using the new dedicated algorithm
+        const waterMask = this.waterDetection.detectWaterBodies(flowAccumulation, slopes, meshWidth, meshHeight);
+        
+        // Apply water coloring to the terrain mesh
+        this.waterDetection.applyWaterColoring(waterMask, meshWidth, meshHeight);
+    }
+    
+
+    
+
+
+    // Compatibility stubs for other visualization data
     setWaterVisualizationData() {}
     setStreamSpawnPoints() {}
-    setStreamPolylines() {}
     setSlopeData() {}
     
     // Clean up resources
